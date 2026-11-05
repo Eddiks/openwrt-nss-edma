@@ -43,32 +43,8 @@ jobs:
           restore-keys: |
             ra74-${{ runner.os }}-${{ hashFiles('.github/ci/ipq50xx/ra74.config', 'feeds.conf.default') }}-
 
-      - name: Prepare RA74-only configuration and wireless defaults
-        shell: bash
-        run: |
-          set -euo pipefail
-          cp .github/ci/ipq50xx/ra74.config .config
-
-          # One-shot defaults only. User changes survive subsequent reboots.
-          # RA74 radio mapping: radio0 -> phy0 (2.4 GHz), radio1 -> phy1 (5 GHz QCN9074).
-          mkdir -p files/etc/uci-defaults
-          cat > files/etc/uci-defaults/99-ra74-wireless <<'EOF'
-          #!/bin/sh
-          uci -q show wireless.radio0 | grep -q '=wifi-device$' || exit 1
-          uci -q show wireless.radio1 | grep -q '=wifi-device$' || exit 1
-
-          uci set wireless.radio0.country='US'
-          uci set wireless.radio0.txpower='25'
-
-          uci set wireless.radio1.country='US'
-          uci set wireless.radio1.channel='36'
-          uci set wireless.radio1.htmode='HE160'
-          uci set wireless.radio1.txpower='25'
-
-          uci commit wireless
-          exit 0
-          EOF
-          chmod 0755 files/etc/uci-defaults/99-ra74-wireless
+      - name: Prepare RA74-only configuration
+        run: cp .github/ci/ipq50xx/ra74.config .config
 
       - name: Update and install feeds
         run: |
