@@ -132,8 +132,8 @@ jobs:
             grep -qxF "$req" .config || dropped+=("$req")
           done < <(grep -E '^CONFIG_[A-Za-z0-9_-]+=' .github/ci/ipq50xx/ra74.config | sort -u)
           if (( ${#dropped[@]} )); then
-            printf '::error::make defconfig dropped required RA74 config entries:\\n'
-            printf '  %s\\n' "${dropped[@]}"
+            echo "::error::make defconfig dropped required RA74 config entries:"
+            printf '  %s\n' "${dropped[@]}"
             exit 1
           fi
 
