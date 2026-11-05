@@ -143,6 +143,125 @@ jobs:
           set -o pipefail
           make -j"$(nproc)" V=s 2>&1 | tee build.log
 
+      - name: Verify NSS runtime packages, Wi-Fi default, and RA74 DSA path
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          IMAGE_DIR="bin/targets/qualcommax/ipq50xx"
+          MANIFEST="$(find "$IMAGE_DIR" -maxdepth 1 -type f -name '*.manifest' -print -quit)"
+          if [[ -z "$MANIFEST" ]]; then
+            echo "::error::The RA74 package manifest was not produced."
+            exit 1
+          fi
+
+          # These must be present in the final image, not merely selected
+          # in .config. nss-tools-dwmac pulls in the IPQ50xx wired stack;
+          # PPPoE and netlink are selected explicitly by the RA74 config.
+          required_packages=(
+            nss-tools-dwmac
+            nss-firmware
+            kmod-qca-dwmac-nss
+            kmod-qca-nss-drv
+            kmod-qca-nss-ecm
+            kmod-qca-nss-drv-vlan-mgr
+            kmod-qca-dsa-nss
+            kmod-qca8337-nss
+            kmod-qca-nss-drv-pppoe
+            kmod-qca-nss-drv-netlink
+            kmod-ppp
+            kmod-pppoe
+          )
+          for pkg in "${required_packages[@]}"; do
+            if ! grep -Eq "^\${pkg}[[:space:]]+-" "$MANIFEST"; then
+              echo "::error::Required NSS package missing from final image manifest: $pkg"
+              exit 1
+            fi
+            echo "Manifest OK: $pkg"
+          done
+
+          # Inspect the actual target rootfs for the runtime scripts installed
+          # by nss-tools-dwmac (paths verified against its package Makefile).
+          ROOTFS="$(find build_dir/target-* -maxdepth 2 -type d -name 'root-*' -print -quit)"
+          if [[ -z "$ROOTFS" ]]; then
+            echo "::error::Could not locate the built target rootfs."
+            exit 1
+          fi
+          for file in \
+            etc/init.d/nss \
+            usr/sbin/nss-dwmac-up \
+            usr/sbin/nss-dwmac-probe \
+            usr/sbin/nss-status \
+            lib/nss/functions.sh \
+            etc/uci-defaults/98-nss-offload \
+            etc/uci-defaults/99-nss-topology; do
+            test -s "$ROOTFS/$file" || {
+              echo "::error::NSS runtime file missing from target rootfs: $file"
+              exit 1
+            }
+            echo "Rootfs OK: $file"
+          done
+
+          # Confirm that the RA74 DTS exposes both GMACs and the QCA8337's
+          # two CPU links: port 5 -> GMAC0 (PHY-to-PHY WAN link), port 6 -> GMAC1 (SGMII).
+          DTS="target/linux/qualcommax/dts/ipq5018-redmi-ax5400.dts"
+          grep -Fqx '#include "ipq5018-nss.dtsi"' "$DTS"
+          grep -A8 '^&gmac0 {' "$DTS" | grep -Fq 'status = "okay";'
+          grep -A12 '^&gmac1 {' "$DTS" | grep -Fq 'status = "okay";'
+          grep -Fq 'compatible = "qca,qca8337";' "$DTS"
+          grep -A8 'ethernet-port@5 {' "$DTS" | grep -Fq 'ethernet = <&gmac0>;'
+          grep -A10 'ethernet-port@6 {' "$DTS" | grep -Fq 'ethernet = <&gmac1>;'
+          grep -Fq 'qca,sgmii-enable-pll;' "$DTS"
+
+          # The stock board network map initially splits the DSA ports:
+          # LAN1-3 on eth1 and WAN on eth0. The DSA defaults must reconcile
+          # that split instead of hard-coding a fw_mask for the two GMACs.
+          BOARD_NET="target/linux/qualcommax/ipq50xx/base-files/etc/board.d/02_network"
+          for line in \
+            'ucidef_set_network_device_conduit "lan1" "eth1"' \
+            'ucidef_set_network_device_conduit "lan2" "eth1"' \
+            'ucidef_set_network_device_conduit "lan3" "eth1"' \
+            'ucidef_set_network_device_conduit "wan" "eth0"'; do
+            grep -Fq "$line" "$BOARD_NET" || {
+              echo "::error::RA74 board DSA conduit mapping missing: $line"
+              exit 1
+            }
+          done
+
+          DEFAULTS="package/nss/nss-tools/files/nss-dwmac.defaults"
+          INIT="package/nss/nss-tools/files/nss-dwmac.init"
+          UP="package/nss/nss-tools/files/nss-dwmac-up"
+          FUNCS="package/nss/nss-tools/files/functions.sh"
+
+          # Require the upstream C-3PO DSA path: retain the DSA switch,
+          # select topology=dsa, turn Wi-Fi offload on by default if unset,
+          # and merge the RA74 split conduits based on the actual board map.
+          grep -Fq 'if c3po_switch_bound; then' "$DEFAULTS"
+          grep -Fq "uci set nss.general.topology='dsa'" "$DEFAULTS"
+          grep -Fq "uci set nss.general.wifi_offload='1'" "$DEFAULTS"
+          grep -Fq 'dsa_board_conduits' "$DEFAULTS"
+          grep -Fq 'main_conduit' "$DEFAULTS"
+          grep -Fq 'if [ "$topology" = "dsa" ]; then' "$INIT"
+          grep -Fq 'switch_to_8021q' "$INIT"
+          grep -Fq 'nss_gmac_netdevs' "$INIT"
+          grep -Fq 'ifmap="$ifmap"' "$INIT"
+          grep -Fq 'nss_dsa_conduit' "$FUNCS"
+          grep -Fq 'nss_dsa_fw_mask' "$UP"
+          grep -Fq 'echo "$MASK" > $FWM' "$UP"
+
+          # Require correct sequencing: arm first, then ath11k/Wi-Fi and
+          # firmware VLAN / DSA managers / ECM / PPPoE managers.
+          grep -Fq 'poll_until 15 fw_started' "$UP"
+          grep -Fq 'wifi_load_now 1' "$UP"
+          grep -Fq 'modprobe qca-nss-vlan' "$UP"
+          grep -Fq 'modprobe qca-nss-pppoe' "$UP"
+          grep -Fq 'modprobe qca-dsa-nss' "$UP"
+          grep -Fq 'modprobe ecm front_end_selection=1' "$UP"
+          grep -Fq 'modprobe ath11k' "$INIT"
+          grep -Fq 'echo "$wifi_offload" > $NSSOFF' "$INIT"
+
+          echo "Validated: NSS package manifest, runtime files, RA74 dual-GMAC DTS, DSA conduit migration, dynamic fw_mask, Wi-Fi offload default=1, VLAN/PPPoE/DSA managers and ECM sequencing."
+
       - name: Verify RA74 image, NSS firmware, and thermal device tree
         shell: bash
         run: |
@@ -202,6 +321,8 @@ jobs:
             echo "Device: Xiaomi Redmi AX5400 RA74"
             echo "Target: qualcommax/ipq50xx"
             echo "NSS firmware: 12.5-210"
+            echo "Switch topology: upstream DSA (tag_8021q), runtime conduit/fw_mask detection"
+            echo "Wi-Fi NSS offload: enabled by DSA first-boot default when unset (nss.general.wifi_offload=1)"
             echo "Country: US"
             echo "5 GHz: channel 36, HE160"
             echo "TX power request: 25 dBm (subject to regulatory and driver limits)"
@@ -231,6 +352,8 @@ jobs:
           body: |
             Xiaomi Redmi AX5400 (RA74) only.
             - NSS firmware: 12.5-210
+            - Switch topology: upstream DSA / tag_8021q; conduit and GMAC mask detected at boot
+            - Wi-Fi NSS offload: DSA first-boot default enabled (unless overridden in UCI)
             - 5 GHz default: channel 36, HE160 (DFS may apply to the full 160 MHz block)
             - Country code: US
             - TX power setting: 25 dBm requested; actual output is limited by regulatory domain and driver
