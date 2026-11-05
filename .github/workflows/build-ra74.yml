@@ -49,8 +49,8 @@ jobs:
           set -euo pipefail
           cp .github/ci/ipq50xx/ra74.config .config
 
-          # First-boot-only defaults: user changes persist after this script is removed.
-          # RA74 convention: radio0 -> internal 2.4 GHz (phy0), radio1 -> QCN9074 5 GHz (phy1).
+          # One-shot defaults only. User changes survive subsequent reboots.
+          # RA74 radio mapping: radio0 -> phy0 (2.4 GHz), radio1 -> phy1 (5 GHz QCN9074).
           mkdir -p files/etc/uci-defaults
           cat > files/etc/uci-defaults/99-ra74-wireless <<'EOF'
           #!/bin/sh
@@ -104,54 +104,7 @@ jobs:
 
           grep -q '^CONFIG_PACKAGE_luci=m$' .config
           grep -q '^CONFIG_PACKAGE_luci-app-nss=m$' .config
-          grep -q '^CONFIG_LUCI_LANG_zh_Hans=m          echo "Validated: RA74 only, NSS 12.5, LuCI Chinese."
-
-      - name: Clean ath11k/mac80211 conditional build
-        run: make package/kernel/mac80211/clean
-
-      - name: Build firmware
-        shell: bash
-        run: |
-          set -o pipefail
-          make -j"$(nproc)" V=s 2>&1 | tee build.log
-
-      - name: Verify RA74 image and NSS firmware version
-        shell: bash
-        run: |
-          set -euo pipefail
-          IMAGE_DIR="bin/targets/qualcommax/ipq50xx"
-          test -d "$IMAGE_DIR"
-
-          find "$IMAGE_DIR" -maxdepth 1 -type f -printf '%f\n' | sort
-          IMAGE="$(find "$IMAGE_DIR" -maxdepth 1 -type f -name '*xiaomi_redmi-ax5400*squashfs-sysupgrade.bin' -print -quit)"
-          if [[ -z "$IMAGE" ]]; then
-            echo "::error::RA74 sysupgrade image was not produced."
-            exit 1
-          fi
-
-          FW="$(find bin -type f -name 'qca-nss0-retail.bin' -print -quit)"
-          if [[ -z "$FW" ]]; then
-            FW="$(find bin -type f -name '*nss*firmware*.bin' -print -quit)"
-          fi
-          if [[ -n "$FW" ]]; then
-            strings "$FW" > /tmp/nss-fw-strings.txt
-            grep -m1 -E 'NSS\.FW\.12\.5-210' /tmp/nss-fw-strings.txt
-          else
-            echo "::warning::NSS firmware binary not found for direct version check."
-          fi
-
-          sha256sum "$IMAGE"
-
-      - name: Upload RA74 build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: Redmi-AX5400-RA74-NSS-${{ github.run_number }}
-          path: |
-            bin/targets/qualcommax/ipq50xx/
-            build.log
-          if-no-files-found: error
-          retention-days: 14
- .config
+          grep -q '^CONFIG_LUCI_LANG_zh_Hans=m$' .config
           echo "Validated: RA74 only, NSS 12.5, LuCI Chinese."
 
       - name: Clean ath11k/mac80211 conditional build
