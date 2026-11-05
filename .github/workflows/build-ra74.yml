@@ -161,7 +161,7 @@ jobs:
           IMAGE="${images[0]}"
 
           # Verify the NSS firmware inside the actual firmware package.
-          FWPKG="$(find bin -type f \\( -name 'nss-firmware*.ipk' -o -name 'nss-firmware*.apk' \\) -print -quit)"
+          FWPKG="$(find bin -type f \( -name 'nss-firmware*.ipk' -o -name 'nss-firmware*.apk' \) -print -quit)"
           if [[ -z "$FWPKG" ]]; then
             echo "::error::The nss-firmware package was not produced."
             exit 1
