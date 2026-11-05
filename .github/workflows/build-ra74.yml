@@ -88,7 +88,76 @@ jobs:
           echo "Selected target device:"
           grep -E '^CONFIG_TARGET_qualcommax_ipq50xx_DEVICE_.*=y$' .config || true
 
-          mapfile -t devices < <(grep -E '^CONFIG_TARGET_DEVICE_qualcommax_ipq50xx_DEVICE_.*=y$' .config || true)
+          mapfile -t devices < <(grep -E '^CONFIG_TARGET_qualcommax_ipq50xx_DEVICE_.*=y
+          if [[ "${#devices[@]}" -ne 1 || "${devices[0]}" != "CONFIG_TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_redmi-ax5400=y" ]]; then
+            echo "::error::The resolved config must select Redmi AX5400 RA74 and no other device."
+            exit 1
+          fi
+
+          if grep -q '^CONFIG_TARGET_MULTI_PROFILE=y' .config; then
+            echo "::error::Multi-profile builds are not allowed in this workflow."
+            exit 1
+          fi
+
+          grep -q '^CONFIG_NSS_FIRMWARE_VERSION_12_5=y' .config
+          ! grep -q '^CONFIG_NSS_FIRMWARE_VERSION_12_2=y' .config
+
+          # README.ipq50xx.md says to revert the temporary bring-up debug-aids
+          # commit for deployment images. Fail closed if either option survives.
+          if grep -Eq '^CONFIG_(MAGIC_SYSRQ_SERIAL|DEVMEM)=y$' .config; then
+            echo "::error::Temporary NSS bring-up debug options are enabled. Revert the debug-aids commit before producing a deployment image."
+            grep -E '^CONFIG_(MAGIC_SYSRQ_SERIAL|DEVMEM)=y$' .config
+            exit 1
+          fi
+
+          echo "Validated: RA74 only, NSS firmware 12.5, no multi-profile."
+
+      - name: Clean ath11k/mac80211 conditional build
+        run: make package/kernel/mac80211/clean
+
+      - name: Build firmware
+        shell: bash
+        run: |
+          set -o pipefail
+          make -j"$(nproc)" V=s 2>&1 | tee build.log
+
+      - name: Verify RA74 image and NSS firmware version
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE_DIR="bin/targets/qualcommax/ipq50xx"
+          test -d "$IMAGE_DIR"
+
+          find "$IMAGE_DIR" -maxdepth 1 -type f -printf '%f\n' | sort
+
+          IMAGE="$(find "$IMAGE_DIR" -maxdepth 1 -type f -name '*xiaomi_redmi-ax5400*squashfs-sysupgrade.bin' -print -quit)"
+          if [[ -z "$IMAGE" ]]; then
+            echo "::error::RA74 sysupgrade image was not produced."
+            exit 1
+          fi
+
+          FW="$(find bin -type f -name 'qca-nss0-retail.bin' -print -quit)"
+          if [[ -z "$FW" ]]; then
+            FW="$(find bin -type f -name '*nss*firmware*.bin' -print -quit)"
+          fi
+          if [[ -n "$FW" ]]; then
+            strings "$FW" | grep -m1 -E 'NSS\.FW\.12\.5-210'
+          else
+            echo "::warning::Could not locate the NSS firmware binary for a direct strings check."
+          fi
+
+          sha256sum "$IMAGE"
+
+      - name: Upload RA74 build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Redmi-AX5400-RA74-NSS-${{ github.run_number }}
+          path: |
+            bin/targets/qualcommax/ipq50xx/
+            build.log
+          if-no-files-found: error
+          retention-days: 14
+ .config || true)
           if [[ "${#devices[@]}" -ne 1 || "${devices[0]}" != "CONFIG_TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_redmi-ax5400=y" ]]; then
             echo "::error::The resolved config must select Redmi AX5400 RA74 and no other device."
             exit 1
