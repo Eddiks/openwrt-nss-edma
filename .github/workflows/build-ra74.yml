@@ -188,6 +188,8 @@ jobs:
           dtc -I dtb -O dts "$DTB" > /tmp/ra74-device-tree.dts
           grep -F 'cpu-thermal' /tmp/ra74-device-tree.dts
           grep -F 'thermal-sensor' /tmp/ra74-device-tree.dts
+          grep -F 'cpu-passive' /tmp/ra74-device-tree.dts
+          grep -F 'cooling-device' /tmp/ra74-device-tree.dts
 
           # Preserve the upstream OpenWrt sysupgrade filename.
           mkdir -p release
