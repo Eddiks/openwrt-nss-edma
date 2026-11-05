@@ -125,6 +125,18 @@ jobs:
           set -euo pipefail
           make defconfig
 
+          # Match the upstream workflow: every explicit RA74 config request
+          # must survive Kconfig resolution, not merely the subset checked below.
+          dropped=()
+          while IFS= read -r req; do
+            grep -qxF "$req" .config || dropped+=("$req")
+          done < <(grep -E '^CONFIG_[A-Za-z0-9_-]+=' .github/ci/ipq50xx/ra74.config | sort -u)
+          if (( ${#dropped[@]} )); then
+            printf '::error::make defconfig dropped required RA74 config entries:\\n'
+            printf '  %s\\n' "${dropped[@]}"
+            exit 1
+          fi
+
           mapfile -t devices < <(grep '^CONFIG_TARGET_qualcommax_ipq50xx_DEVICE_.*=y' .config || true)
           expected='CONFIG_TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_redmi-ax5400=y'
           if (( ${#devices[@]} != 1 )) || [[ "${devices[0]}" != "$expected" ]]; then
