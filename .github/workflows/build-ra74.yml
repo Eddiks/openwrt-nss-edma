@@ -46,6 +46,31 @@ jobs:
       - name: Prepare RA74-only configuration
         run: cp .github/ci/ipq50xx/ra74.config .config
 
+      - name: Add one-time RA74 wireless defaults
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p files/etc/uci-defaults
+          cat > files/etc/uci-defaults/99-ra74-wireless <<'EOF'
+          #!/bin/sh
+          # Apply only once; OpenWrt removes successful uci-defaults scripts.
+          # Verify the detected radio mapping before changing anything.
+          [ "$(uci -q get wireless.radio0.band)" = "2g" ] || exit 1
+          [ "$(uci -q get wireless.radio1.band)" = "5g" ] || exit 1
+
+          uci set wireless.radio0.country='US'
+          uci set wireless.radio0.txpower='25'
+
+          uci set wireless.radio1.country='US'
+          uci set wireless.radio1.channel='36'
+          uci set wireless.radio1.htmode='HE160'
+          uci set wireless.radio1.txpower='25'
+
+          uci commit wireless
+          exit 0
+          EOF
+          chmod 0755 files/etc/uci-defaults/99-ra74-wireless
+
       - name: Update and install feeds
         run: |
           ./scripts/feeds update -a
