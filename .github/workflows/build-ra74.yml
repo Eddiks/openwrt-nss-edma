@@ -1,0 +1,376 @@
+name: Build Redmi AX5400 RA74 (NSS)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-ra74-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-ra74:
+    name: Build Xiaomi Redmi AX5400 RA74 only
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      FORCE_UNSAFE_CONFIGURE: 1
+
+    steps:
+      - name: Checkout this branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+            gettext git libncurses-dev libssl-dev libelf-dev libzstd-dev \
+            libgmp3-dev libmpc-dev libmpfr-dev \
+            python3 python3-setuptools python3-dev python3-yaml python3-pyelftools \
+            python3-requests rsync swig unzip zlib1g-dev file wget curl ccache \
+            xsltproc zstd device-tree-compiler qemu-utils
+
+      - name: Restore compiler cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ra74-${{ runner.os }}-${{ hashFiles('.github/ci/ipq50xx/ra74.config', 'feeds.conf.default') }}-${{ github.sha }}
+          restore-keys: |
+            ra74-${{ runner.os }}-${{ hashFiles('.github/ci/ipq50xx/ra74.config', 'feeds.conf.default') }}-
+
+      - name: Prepare RA74-only configuration
+        run: cp .github/ci/ipq50xx/ra74.config .config
+
+      - name: Add one-time RA74 wireless defaults
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p files/etc/uci-defaults
+          cat > files/etc/uci-defaults/99-ra74-wireless <<'EOF'
+          #!/bin/sh
+          # Apply once only. The script is removed after successful execution.
+          [ "$(uci -q get wireless.radio0.band)" = "2g" ] || exit 1
+          [ "$(uci -q get wireless.radio1.band)" = "5g" ] || exit 1
+
+          uci set wireless.radio0.country='US'
+          uci set wireless.radio0.txpower='25'
+
+          uci set wireless.radio1.country='US'
+          uci set wireless.radio1.channel='36'
+          uci set wireless.radio1.htmode='HE160'
+          uci set wireless.radio1.txpower='25'
+
+          uci commit wireless
+          exit 0
+          EOF
+          chmod 0755 files/etc/uci-defaults/99-ra74-wireless
+
+      - name: Update and install feeds
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Resolve and validate the single-device configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          make defconfig
+
+          mapfile -t devices < <(grep '^CONFIG_TARGET_qualcommax_ipq50xx_DEVICE_.*=y' .config || true)
+          expected='CONFIG_TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_redmi-ax5400=y'
+          if (( ${#devices[@]} != 1 )) || [[ "${devices[0]}" != "$expected" ]]; then
+            echo "::error::The resolved config must select Redmi AX5400 RA74 and no other device."
+            printf '%s\n' "${devices[@]}"
+            exit 1
+          fi
+
+          if grep -Fqx 'CONFIG_TARGET_MULTI_PROFILE=y' .config; then
+            echo "::error::Multi-profile builds are not allowed."
+            exit 1
+          fi
+
+          grep -Fqx 'CONFIG_TARGET_PER_DEVICE_ROOTFS=y' .config
+          grep -Fqx 'CONFIG_ATH11K_MEM_PROFILE_1G=y' .config
+          grep -Fqx 'CONFIG_NSS_MEM_PROFILE_MEDIUM=y' .config
+          grep -Fqx 'CONFIG_NSS_FIRMWARE_VERSION_12_5=y' .config
+          grep -Fqx 'CONFIG_PACKAGE_nss-tools-dwmac=y' .config
+          grep -Fqx 'CONFIG_PACKAGE_nss-firmware=y' .config
+          grep -Fqx 'CONFIG_NSS_DRV_VLAN_ENABLE=y' .config
+          grep -Fqx 'CONFIG_NSS_DRV_IPV6_ENABLE=y' .config
+          grep -Fqx 'CONFIG_NSS_DRV_PPPOE_ENABLE=y' .config
+          grep -Fqx 'CONFIG_NSS_DRV_VIRT_IF_ENABLE=y' .config
+          grep -Fqx 'CONFIG_ATH11K_NSS_SUPPORT=y' .config
+          grep -Fqx 'CONFIG_NSS_DRV_WIFIOFFLOAD_ENABLE=y' .config
+          grep -Fqx 'CONFIG_NSS_DRV_WIFI_EXT_VDEV_ENABLE=y' .config
+          grep -Fqx 'CONFIG_NSS_DRV_SHAPER_ENABLE=y' .config
+          grep -Fqx 'CONFIG_NSS_DRV_IGS_ENABLE=y' .config
+          grep -Fqx 'CONFIG_PACKAGE_kmod-qca-nss-drv-pppoe=y' .config
+          grep -Fqx 'CONFIG_PACKAGE_kmod-qca-nss-drv-netlink=y' .config
+          grep -Fqx 'CONFIG_PACKAGE_sqm-scripts-nss=y' .config
+          ! grep -Fqx 'CONFIG_NSS_FIRMWARE_VERSION_12_2=y' .config
+
+          grep -Fqx 'CONFIG_PACKAGE_luci=m' .config
+          grep -Fqx 'CONFIG_PACKAGE_luci-app-nss=m' .config
+          grep -Fqx 'CONFIG_LUCI_LANG_zh_Hans=y' .config
+          grep -Fqx 'CONFIG_ATH11K_THERMAL=y' .config
+
+          if grep -Fqx 'CONFIG_MAGIC_SYSRQ_SERIAL=y' .config || grep -Fqx 'CONFIG_DEVMEM=y' .config; then
+            echo "::error::Temporary bring-up debug options are enabled; deployment build blocked."
+            exit 1
+          fi
+
+          # Verify the checked-in IPQ5018 kernel config retains thermal support.
+          grep -Fqx 'CONFIG_QCOM_TSENS=y' target/linux/qualcommax/config-6.18
+          grep -Fqx 'CONFIG_CPU_THERMAL=y' target/linux/qualcommax/config-6.18
+          grep -Fqx 'CONFIG_CPU_FREQ_THERMAL=y' target/linux/qualcommax/config-6.18
+          grep -Fqx 'CONFIG_THERMAL_DEFAULT_GOV_STEP_WISE=y' target/linux/qualcommax/config-6.18
+          grep -Fqx 'CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y' target/linux/qualcommax/config-6.18
+
+          echo "Validated: RA74 only, NSS 12.5, LuCI Chinese, ath11k and CPU thermal support."
+
+      - name: Clean ath11k/mac80211 conditional build
+        run: make package/kernel/mac80211/clean
+
+      - name: Build firmware
+        shell: bash
+        run: |
+          set -o pipefail
+          make -j"$(nproc)" V=s 2>&1 | tee build.log
+
+      - name: Verify NSS runtime packages, Wi-Fi default, and RA74 DSA path
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          IMAGE_DIR="bin/targets/qualcommax/ipq50xx"
+          MANIFEST="$(find "$IMAGE_DIR" -maxdepth 1 -type f -name '*.manifest' -print -quit)"
+          if [[ -z "$MANIFEST" ]]; then
+            echo "::error::The RA74 package manifest was not produced."
+            exit 1
+          fi
+
+          # These must be present in the final image, not merely selected
+          # in .config. nss-tools-dwmac pulls in the IPQ50xx wired stack;
+          # PPPoE and netlink are selected explicitly by the RA74 config.
+          required_packages=(
+            nss-tools-dwmac
+            nss-firmware
+            kmod-qca-dwmac-nss
+            kmod-qca-nss-drv
+            kmod-qca-nss-ecm
+            kmod-qca-nss-drv-vlan-mgr
+            kmod-qca-dsa-nss
+            kmod-qca8337-nss
+            kmod-qca-nss-drv-pppoe
+            kmod-qca-nss-drv-netlink
+            kmod-ppp
+            kmod-pppoe
+          )
+          for pkg in "${required_packages[@]}"; do
+            if ! grep -Eq "^${pkg}[[:space:]]+-" "$MANIFEST"; then
+              echo "::error::Required NSS package missing from final image manifest: $pkg"
+              exit 1
+            fi
+            echo "Manifest OK: $pkg"
+          done
+
+          # Inspect the actual target rootfs for the runtime scripts installed
+          # by nss-tools-dwmac (paths verified against its package Makefile).
+          ROOTFS="$(find build_dir/target-* -maxdepth 2 -type d -name 'root-*' -print -quit)"
+          if [[ -z "$ROOTFS" ]]; then
+            echo "::error::Could not locate the built target rootfs."
+            exit 1
+          fi
+          for file in \
+            etc/init.d/nss \
+            usr/sbin/nss-dwmac-up \
+            usr/sbin/nss-dwmac-probe \
+            usr/sbin/nss-status \
+            lib/nss/functions.sh \
+            etc/uci-defaults/98-nss-offload \
+            etc/uci-defaults/99-nss-topology; do
+            test -s "$ROOTFS/$file" || {
+              echo "::error::NSS runtime file missing from target rootfs: $file"
+              exit 1
+            }
+            echo "Rootfs OK: $file"
+          done
+
+          # Confirm that the RA74 DTS exposes both GMACs and the QCA8337's
+          # two CPU links: port 5 -> GMAC0 (PHY-to-PHY WAN link), port 6 -> GMAC1 (SGMII).
+          DTS="target/linux/qualcommax/dts/ipq5018-redmi-ax5400.dts"
+          grep -Fqx '#include "ipq5018-nss.dtsi"' "$DTS"
+          grep -A8 '^&gmac0 {' "$DTS" | grep -Fq 'status = "okay";'
+          grep -A12 '^&gmac1 {' "$DTS" | grep -Fq 'status = "okay";'
+          grep -Fq 'compatible = "qca,qca8337";' "$DTS"
+          grep -A8 'ethernet-port@5 {' "$DTS" | grep -Fq 'ethernet = <&gmac0>;'
+          grep -A10 'ethernet-port@6 {' "$DTS" | grep -Fq 'ethernet = <&gmac1>;'
+          grep -Fq 'qca,sgmii-enable-pll;' "$DTS"
+
+          # The stock board network map initially splits the DSA ports:
+          # LAN1-3 on eth1 and WAN on eth0. The DSA defaults must reconcile
+          # that split instead of hard-coding a fw_mask for the two GMACs.
+          BOARD_NET="target/linux/qualcommax/ipq50xx/base-files/etc/board.d/02_network"
+          for line in \
+            'ucidef_set_network_device_conduit "lan1" "eth1"' \
+            'ucidef_set_network_device_conduit "lan2" "eth1"' \
+            'ucidef_set_network_device_conduit "lan3" "eth1"' \
+            'ucidef_set_network_device_conduit "wan" "eth0"'; do
+            grep -Fq "$line" "$BOARD_NET" || {
+              echo "::error::RA74 board DSA conduit mapping missing: $line"
+              exit 1
+            }
+          done
+
+          DEFAULTS="package/nss/nss-tools/files/nss-dwmac.defaults"
+          INIT="package/nss/nss-tools/files/nss-dwmac.init"
+          UP="package/nss/nss-tools/files/nss-dwmac-up"
+          FUNCS="package/nss/nss-tools/files/functions.sh"
+
+          # Require the upstream C-3PO DSA path: retain the DSA switch,
+          # select topology=dsa, turn Wi-Fi offload on by default if unset,
+          # and merge the RA74 split conduits based on the actual board map.
+          grep -Fq 'if c3po_switch_bound; then' "$DEFAULTS"
+          grep -Fq "uci set nss.general.topology='dsa'" "$DEFAULTS"
+          grep -Fq "uci set nss.general.wifi_offload='1'" "$DEFAULTS"
+          grep -Fq 'dsa_board_conduits' "$DEFAULTS"
+          grep -Fq 'main_conduit' "$DEFAULTS"
+          grep -Fq 'if [ "$topology" = "dsa" ]; then' "$INIT"
+          grep -Fq 'switch_to_8021q' "$INIT"
+          grep -Fq 'nss_gmac_netdevs' "$INIT"
+          grep -Fq 'ifmap="$ifmap"' "$INIT"
+          grep -Fq 'nss_dsa_conduit' "$FUNCS"
+          grep -Fq 'nss_dsa_fw_mask' "$UP"
+          grep -Fq 'echo "$MASK" > $FWM' "$UP"
+
+          # Require correct sequencing: arm first, then ath11k/Wi-Fi and
+          # firmware VLAN / DSA managers / ECM / PPPoE managers.
+          grep -Fq 'poll_until 15 fw_started' "$UP"
+          grep -Fq 'wifi_load_now 1' "$UP"
+          grep -Fq 'modprobe qca-nss-vlan' "$UP"
+          grep -Fq 'modprobe qca-nss-pppoe' "$UP"
+          grep -Fq 'modprobe qca-dsa-nss' "$UP"
+          grep -Fq 'modprobe ecm front_end_selection=1' "$UP"
+          grep -Fq 'modprobe ath11k' "$INIT"
+          grep -Fq 'echo "$wifi_offload" > $NSSOFF' "$INIT"
+
+          echo "Validated: NSS package manifest, runtime files, RA74 dual-GMAC DTS, DSA conduit migration, dynamic fw_mask, Wi-Fi offload default=1, VLAN/PPPoE/DSA managers and ECM sequencing."
+
+      - name: Verify RA74 image, NSS firmware, and thermal device tree
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          IMAGE_DIR="bin/targets/qualcommax/ipq50xx"
+          test -d "$IMAGE_DIR"
+          find "$IMAGE_DIR" -maxdepth 1 -type f -printf '%f\n' | sort
+
+          mapfile -t images < <(find "$IMAGE_DIR" -maxdepth 1 -type f -name '*xiaomi_redmi-ax5400*squashfs-sysupgrade.bin' -print)
+          if (( ${#images[@]} != 1 )); then
+            echo "::error::Expected exactly one RA74 sysupgrade image; found ${#images[@]}."
+            printf '%s\n' "${images[@]}"
+            exit 1
+          fi
+          IMAGE="${images[0]}"
+
+          # Verify the NSS firmware inside the actual firmware package.
+          FWPKG="$(find bin -type f \( -name 'nss-firmware*.ipk' -o -name 'nss-firmware*.apk' \) -print -quit)"
+          if [[ -z "$FWPKG" ]]; then
+            echo "::error::The nss-firmware package was not produced."
+            exit 1
+          fi
+          case "$FWPKG" in
+            *.ipk) ar p "$FWPKG" data.tar.gz > /tmp/nss-firmware-data.tar.gz ;;
+            *.apk) tar -xOzf "$FWPKG" data.tar.gz > /tmp/nss-firmware-data.tar.gz ;;
+            *) echo "::error::Unsupported package format: $FWPKG"; exit 1 ;;
+          esac
+          FW_PATH="$(tar -tzf /tmp/nss-firmware-data.tar.gz | grep -F 'qca-nss0-retail.bin' | sed -n '1p')"
+          if [[ -z "$FW_PATH" ]]; then
+            echo "::error::qca-nss0-retail.bin is missing from nss-firmware package."
+            exit 1
+          fi
+          tar -xOzf /tmp/nss-firmware-data.tar.gz "$FW_PATH" | strings > /tmp/nss-fw-strings.txt
+          grep -F 'NSS.FW.12.5-210' /tmp/nss-fw-strings.txt
+
+          # Verify the compiled board DTB contains the CPU thermal zone.
+          DTB="$(find build_dir -type f -name 'image-ipq5018-redmi-ax5400.dtb' -print -quit)"
+          if [[ -z "$DTB" ]]; then
+            echo "::error::RA74 device tree blob was not found."
+            exit 1
+          fi
+          dtc -I dtb -O dts "$DTB" > /tmp/ra74-device-tree.dts
+          grep -F 'cpu-thermal' /tmp/ra74-device-tree.dts
+          grep -F 'thermal-sensor' /tmp/ra74-device-tree.dts
+          grep -F 'cpu-passive' /tmp/ra74-device-tree.dts
+          grep -F 'cooling-device' /tmp/ra74-device-tree.dts
+
+          # Preserve the upstream OpenWrt sysupgrade filename.
+          mkdir -p release
+          cp "$IMAGE" release/
+          sha256sum "release/$(basename "$IMAGE")" > "release/$(basename "$IMAGE").sha256"
+          cp "$IMAGE_DIR"/*.manifest release/ 2>/dev/null || true
+          cp .config release/config.buildinfo
+          cp feeds.conf.default release/feeds.conf.default
+          {
+            echo "Device: Xiaomi Redmi AX5400 RA74"
+            echo "Target: qualcommax/ipq50xx"
+            echo "NSS firmware: 12.5-210"
+            echo "Switch topology: upstream DSA (tag_8021q), runtime conduit/fw_mask detection"
+            echo "Wi-Fi NSS offload: enabled by DSA first-boot default when unset (nss.general.wifi_offload=1)"
+            echo "Country: US"
+            echo "5 GHz: channel 36, HE160"
+            echo "TX power request: 25 dBm (subject to regulatory and driver limits)"
+            echo "Thermal: QCOM TSENS + CPU thermal governor + ath11k thermal support"
+            echo "Source commit: $GITHUB_SHA"
+            for feed in packages luci routing telephony video nss; do
+              if [[ -d "feeds/$feed/.git" ]]; then
+                printf 'Feed %s: %s\n' "$feed" "$(git -C "feeds/$feed" rev-parse HEAD)"
+              fi
+            done
+          } > release/BUILD-INFO.txt
+
+          RELEASE_DATE="$(date -u +%Y.%m.%d)"
+          RELEASE_TAG="ipq50xx-${RELEASE_DATE}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+            RELEASE_TAG="${RELEASE_TAG}-ra74-run${GITHUB_RUN_NUMBER}"
+          fi
+          echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
+          sha256sum "$IMAGE"
+
+      - name: Publish firmware to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
+          name: "Redmi AX5400 RA74 — NSS 12.5 — ${{ env.RELEASE_TAG }}"
+          body: |
+            Xiaomi Redmi AX5400 (RA74) only.
+            - NSS firmware: 12.5-210
+            - Switch topology: upstream DSA / tag_8021q; conduit and GMAC mask detected at boot
+            - Wi-Fi NSS offload: DSA first-boot default enabled (unless overridden in UCI)
+            - 5 GHz default: channel 36, HE160 (DFS may apply to the full 160 MHz block)
+            - Country code: US
+            - TX power setting: 25 dBm requested; actual output is limited by regulatory domain and driver
+            - CPU and ath11k thermal monitoring/throttling support are enabled
+            - Built from commit: ${{ github.sha }}
+            - Sysupgrade image only; not a stock factory/recovery image.
+          files: |
+            release/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+
+      - name: Upload RA74 build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Redmi-AX5400-RA74-NSS-${{ github.run_number }}
+          path: |
+            bin/targets/qualcommax/ipq50xx/
+            build.log
+          if-no-files-found: error
+          retention-days: 14
