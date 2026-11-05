@@ -173,7 +173,7 @@ jobs:
             kmod-pppoe
           )
           for pkg in "${required_packages[@]}"; do
-            if ! grep -Eq "^\${pkg}[[:space:]]+-" "$MANIFEST"; then
+            if ! grep -Eq "^${pkg}[[:space:]]+-" "$MANIFEST"; then
               echo "::error::Required NSS package missing from final image manifest: $pkg"
               exit 1
             fi
