@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: build-ra74-${{ github.ref }}
@@ -107,6 +107,235 @@ jobs:
           grep -q '^CONFIG_PACKAGE_luci-app-nss=m$' .config
           grep -q '^CONFIG_LUCI_LANG_zh_Hans=m$' .config
           echo "Validated: RA74 only, NSS 12.5, LuCI Chinese."
+
+          # This branch's IPQ5018 kernel config already enables TSENS,
+          # CPU thermal throttling and the step_wise thermal governor.
+          grep -q '^CONFIG_QCOM_TSENS=y
+
+      - name: Clean ath11k/mac80211 conditional build
+        run: make package/kernel/mac80211/clean
+
+      - name: Build firmware
+        shell: bash
+        run: |
+          set -o pipefail
+          make -j"$(nproc)" V=s 2>&1 | tee build.log
+
+      - name: Verify RA74 image and NSS firmware version
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE_DIR="bin/targets/qualcommax/ipq50xx"
+          test -d "$IMAGE_DIR"
+
+          find "$IMAGE_DIR" -maxdepth 1 -type f -printf '%f\n' | sort
+          mapfile -t images < <(find "$IMAGE_DIR" -maxdepth 1 -type f -name '*xiaomi_redmi-ax5400*squashfs-sysupgrade.bin' -print)
+          if [[ "${#images[@]}" -ne 1 ]]; then
+            echo "::error::Expected exactly one RA74 sysupgrade image; found ${#images[@]}."
+            printf '%s\\n' "${images[@]}"
+            exit 1
+          fi
+          IMAGE="${images[0]}"
+
+          FW="$(find bin -type f -name 'qca-nss0-retail.bin' -print -quit)"
+          if [[ -z "$FW" ]]; then
+            FW="$(find bin -type f -name '*nss*firmware*.bin' -print -quit)"
+          fi
+          if [[ -n "$FW" ]]; then
+            strings "$FW" > /tmp/nss-fw-strings.txt
+            grep -m1 -E 'NSS\.FW\.12\.5-210' /tmp/nss-fw-strings.txt
+          else
+            echo "::warning::NSS firmware binary not found for direct version check."
+          fi
+
+          # Prepare a stable, human-readable Release asset name.
+          mkdir -p release
+          RELEASE_DATE="$(date -u +%Y%m%d)"
+          RELEASE_TAG="ra74-nss12.5-${RELEASE_DATE}-run${GITHUB_RUN_NUMBER}"
+          RELEASE_FILE="Redmi-AX5400-RA74-OpenWrt-NSS12.5-${RELEASE_DATE}-run${GITHUB_RUN_NUMBER}-sysupgrade.bin"
+          cp "$IMAGE" "release/$RELEASE_FILE"
+          sha256sum "release/$RELEASE_FILE" > "release/$RELEASE_FILE.sha256"
+          cp "$IMAGE_DIR"/*.manifest release/ 2>/dev/null || true
+          cp .config release/build.config
+          printf 'Release tag: %s\\nSource commit: %s\\nNSS firmware: 12.5-210\\nDevice: Xiaomi Redmi AX5400 RA74\\n' "$RELEASE_TAG" "$GITHUB_SHA" > release/BUILD-INFO.txt
+          echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
+          echo "RELEASE_FILE=release/$RELEASE_FILE" >> "$GITHUB_ENV"
+          sha256sum "$IMAGE"
+
+      - name: Publish firmware to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
+          name: "Redmi AX5400 RA74 — OpenWrt NSS 12.5 — Run ${{ github.run_number }}"
+          body: |
+            Xiaomi Redmi AX5400 (RA74) only.
+            - NSS firmware: 12.5-210
+            - 5 GHz default: channel 36, HE160
+            - Country code: US
+            - TX power setting: 25 dBm requested (actual output is regulatory/driver limited)
+            - Built from commit: ${{ github.sha }}
+            - This is a sysupgrade image for the existing OpenWrt installation; it is not a stock factory recovery image.
+          files: |
+            release/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+
+      - name: Upload RA74 build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Redmi-AX5400-RA74-NSS-${{ github.run_number }}
+          path: |
+            bin/targets/qualcommax/ipq50xx/
+            build.log
+          if-no-files-found: error
+          retention-days: 14
+ target/linux/qualcommax/config-6.18
+          grep -q '^CONFIG_CPU_THERMAL=y
+
+      - name: Clean ath11k/mac80211 conditional build
+        run: make package/kernel/mac80211/clean
+
+      - name: Build firmware
+        shell: bash
+        run: |
+          set -o pipefail
+          make -j"$(nproc)" V=s 2>&1 | tee build.log
+
+      - name: Verify RA74 image and NSS firmware version
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE_DIR="bin/targets/qualcommax/ipq50xx"
+          test -d "$IMAGE_DIR"
+
+          find "$IMAGE_DIR" -maxdepth 1 -type f -printf '%f\n' | sort
+          IMAGE="$(find "$IMAGE_DIR" -maxdepth 1 -type f -name '*xiaomi_redmi-ax5400*squashfs-sysupgrade.bin' -print -quit)"
+          if [[ -z "$IMAGE" ]]; then
+            echo "::error::RA74 sysupgrade image was not produced."
+            exit 1
+          fi
+
+          FW="$(find bin -type f -name 'qca-nss0-retail.bin' -print -quit)"
+          if [[ -z "$FW" ]]; then
+            FW="$(find bin -type f -name '*nss*firmware*.bin' -print -quit)"
+          fi
+          if [[ -n "$FW" ]]; then
+            strings "$FW" > /tmp/nss-fw-strings.txt
+            grep -m1 -E 'NSS\.FW\.12\.5-210' /tmp/nss-fw-strings.txt
+          else
+            echo "::warning::NSS firmware binary not found for direct version check."
+          fi
+
+          sha256sum "$IMAGE"
+
+      - name: Upload RA74 build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Redmi-AX5400-RA74-NSS-${{ github.run_number }}
+          path: |
+            bin/targets/qualcommax/ipq50xx/
+            build.log
+          if-no-files-found: error
+          retention-days: 14
+ target/linux/qualcommax/config-6.18
+          grep -q '^CONFIG_CPU_FREQ_THERMAL=y
+
+      - name: Clean ath11k/mac80211 conditional build
+        run: make package/kernel/mac80211/clean
+
+      - name: Build firmware
+        shell: bash
+        run: |
+          set -o pipefail
+          make -j"$(nproc)" V=s 2>&1 | tee build.log
+
+      - name: Verify RA74 image and NSS firmware version
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE_DIR="bin/targets/qualcommax/ipq50xx"
+          test -d "$IMAGE_DIR"
+
+          find "$IMAGE_DIR" -maxdepth 1 -type f -printf '%f\n' | sort
+          IMAGE="$(find "$IMAGE_DIR" -maxdepth 1 -type f -name '*xiaomi_redmi-ax5400*squashfs-sysupgrade.bin' -print -quit)"
+          if [[ -z "$IMAGE" ]]; then
+            echo "::error::RA74 sysupgrade image was not produced."
+            exit 1
+          fi
+
+          FW="$(find bin -type f -name 'qca-nss0-retail.bin' -print -quit)"
+          if [[ -z "$FW" ]]; then
+            FW="$(find bin -type f -name '*nss*firmware*.bin' -print -quit)"
+          fi
+          if [[ -n "$FW" ]]; then
+            strings "$FW" > /tmp/nss-fw-strings.txt
+            grep -m1 -E 'NSS\.FW\.12\.5-210' /tmp/nss-fw-strings.txt
+          else
+            echo "::warning::NSS firmware binary not found for direct version check."
+          fi
+
+          sha256sum "$IMAGE"
+
+      - name: Upload RA74 build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Redmi-AX5400-RA74-NSS-${{ github.run_number }}
+          path: |
+            bin/targets/qualcommax/ipq50xx/
+            build.log
+          if-no-files-found: error
+          retention-days: 14
+ target/linux/qualcommax/config-6.18
+          grep -q '^CONFIG_THERMAL_DEFAULT_GOV_STEP_WISE=y
+
+      - name: Clean ath11k/mac80211 conditional build
+        run: make package/kernel/mac80211/clean
+
+      - name: Build firmware
+        shell: bash
+        run: |
+          set -o pipefail
+          make -j"$(nproc)" V=s 2>&1 | tee build.log
+
+      - name: Verify RA74 image and NSS firmware version
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE_DIR="bin/targets/qualcommax/ipq50xx"
+          test -d "$IMAGE_DIR"
+
+          find "$IMAGE_DIR" -maxdepth 1 -type f -printf '%f\n' | sort
+          IMAGE="$(find "$IMAGE_DIR" -maxdepth 1 -type f -name '*xiaomi_redmi-ax5400*squashfs-sysupgrade.bin' -print -quit)"
+          if [[ -z "$IMAGE" ]]; then
+            echo "::error::RA74 sysupgrade image was not produced."
+            exit 1
+          fi
+
+          FW="$(find bin -type f -name 'qca-nss0-retail.bin' -print -quit)"
+          if [[ -z "$FW" ]]; then
+            FW="$(find bin -type f -name '*nss*firmware*.bin' -print -quit)"
+          fi
+          if [[ -n "$FW" ]]; then
+            strings "$FW" > /tmp/nss-fw-strings.txt
+            grep -m1 -E 'NSS\.FW\.12\.5-210' /tmp/nss-fw-strings.txt
+          else
+            echo "::warning::NSS firmware binary not found for direct version check."
+          fi
+
+          sha256sum "$IMAGE"
+
+      - name: Upload RA74 build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Redmi-AX5400-RA74-NSS-${{ github.run_number }}
+          path: |
+            bin/targets/qualcommax/ipq50xx/
+            build.log
+          if-no-files-found: error
+          retention-days: 14
+ target/linux/qualcommax/config-6.18
+          echo "Validated: IPQ5018 TSENS and CPU thermal throttling kernel options."
 
       - name: Clean ath11k/mac80211 conditional build
         run: make package/kernel/mac80211/clean
