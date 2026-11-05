@@ -2,12 +2,6 @@ name: Build Redmi AX5400 RA74 (NSS)
 
 on:
   workflow_dispatch:
-    inputs:
-      clean_build:
-        description: "Start from a clean build tree (slower, safest after source changes)"
-        required: true
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -92,10 +86,10 @@ jobs:
           make defconfig
 
           echo "Selected target device:"
-          grep -E '^CONFIG_TARGET_DEVICE_qualcommax_ipq50xx_DEVICE_.*=y$' .config || true
+          grep -E '^CONFIG_TARGET_qualcommax_ipq50xx_DEVICE_.*=y$' .config || true
 
           mapfile -t devices < <(grep -E '^CONFIG_TARGET_DEVICE_qualcommax_ipq50xx_DEVICE_.*=y$' .config || true)
-          if [[ "${#devices[@]}" -ne 1 || "${devices[0]}" != "CONFIG_TARGET_DEVICE_qualcommax_ipq50xx_DEVICE_xiaomi_redmi-ax5400=y" ]]; then
+          if [[ "${#devices[@]}" -ne 1 || "${devices[0]}" != "CONFIG_TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_redmi-ax5400=y" ]]; then
             echo "::error::The resolved config must select Redmi AX5400 RA74 and no other device."
             exit 1
           fi
