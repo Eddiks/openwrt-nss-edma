@@ -161,12 +161,16 @@ jobs:
           IMAGE="${images[0]}"
 
           # Verify the NSS firmware inside the actual firmware package.
-          FWPKG="$(find bin -type f -name 'nss-firmware*.ipk' -print -quit)"
+          FWPKG="$(find bin -type f \\( -name 'nss-firmware*.ipk' -o -name 'nss-firmware*.apk' \\) -print -quit)"
           if [[ -z "$FWPKG" ]]; then
             echo "::error::The nss-firmware package was not produced."
             exit 1
           fi
-          ar p "$FWPKG" data.tar.gz > /tmp/nss-firmware-data.tar.gz
+          case "$FWPKG" in
+            *.ipk) ar p "$FWPKG" data.tar.gz > /tmp/nss-firmware-data.tar.gz ;;
+            *.apk) tar -xOzf "$FWPKG" data.tar.gz > /tmp/nss-firmware-data.tar.gz ;;
+            *) echo "::error::Unsupported package format: $FWPKG"; exit 1 ;;
+          esac
           FW_PATH="$(tar -tzf /tmp/nss-firmware-data.tar.gz | grep -F 'qca-nss0-retail.bin' | sed -n '1p')"
           if [[ -z "$FW_PATH" ]]; then
             echo "::error::qca-nss0-retail.bin is missing from nss-firmware package."
