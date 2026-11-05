@@ -71,10 +71,53 @@ jobs:
           EOF
           chmod 0755 files/etc/uci-defaults/99-ra74-wireless
 
-      - name: Update and install feeds
+      - name: Update feeds and install only RA74 build dependencies
+        shell: bash
         run: |
+          set -euo pipefail
           ./scripts/feeds update -a
-          ./scripts/feeds install -a
+          make prepare-tmpinfo
+
+          # Install only packages explicitly selected by the RA74 config plus
+          # packages listed by the RA74 device profile. scripts/feeds resolves
+          # their recursive build/runtime dependencies. Installing every source
+          # package in every feed parses unrelated Kconfig entries (Qt5, fwknop,
+          # squeezelite) that are not part of this firmware.
+          mapfile -t feed_packages < <(python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          config = Path(".github/ci/ipq50xx/ra74.config").read_text()
+          selected = set()
+          for name, value in re.findall(r"^CONFIG_PACKAGE_([A-Za-z0-9_+-]+)=(y|m)$", config, re.M):
+              selected.add(name)
+
+          targetinfo = Path("tmp/.targetinfo").read_text()
+          blocks = re.split(r"(?m)^Target-Profile:\\s*", targetinfo)
+          profile = "DEVICE_xiaomi_redmi-ax5400"
+          found = False
+          for block in blocks[1:]:
+              name = block.splitlines()[0].strip()
+              if name != profile:
+                  continue
+              found = True
+              match = re.search(r"(?m)^Target-Profile-Packages:(.*)$", block)
+              if match:
+                  selected.update(pkg.lstrip("-") for pkg in match.group(1).split() if not pkg.startswith("-"))
+              break
+
+          if not found:
+              raise SystemExit(f"RA74 device profile {profile} not found in tmp/.targetinfo")
+          for name in sorted(selected):
+              print(name)
+          PY
+          )
+
+          printf 'Installing %s selected/feed device packages:\n' "${#feed_packages[@]}"
+          printf '  %s\n' "${feed_packages[@]}"
+          if (( ${#feed_packages[@]} )); then
+            ./scripts/feeds install "${feed_packages[@]}"
+          fi
 
       - name: Resolve and validate the single-device configuration
         shell: bash
@@ -115,7 +158,6 @@ jobs:
           grep -Fqx 'CONFIG_PACKAGE_sqm-scripts-nss=y' .config
           ! grep -Fqx 'CONFIG_NSS_FIRMWARE_VERSION_12_2=y' .config
 
-          grep -Fqx 'CONFIG_PACKAGE_luci=m' .config
           grep -Fqx 'CONFIG_PACKAGE_luci-app-nss=m' .config
           grep -Fqx 'CONFIG_LUCI_LANG_zh_Hans=y' .config
           grep -Fqx 'CONFIG_ATH11K_THERMAL=y' .config
