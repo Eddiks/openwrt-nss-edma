@@ -215,7 +215,10 @@ jobs:
           } > release/BUILD-INFO.txt
 
           RELEASE_DATE="$(date -u +%Y.%m.%d)"
-          RELEASE_TAG="ipq50xx-${RELEASE_DATE}-ra74-run${GITHUB_RUN_NUMBER}"
+          RELEASE_TAG="ipq50xx-${RELEASE_DATE}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+            RELEASE_TAG="${RELEASE_TAG}-ra74-run${GITHUB_RUN_NUMBER}"
+          fi
           echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
           sha256sum "$IMAGE"
 
