@@ -108,6 +108,13 @@ jobs:
 
           if not found:
               raise SystemExit(f"RA74 device profile {profile} not found in tmp/.targetinfo")
+
+          # nss-tools-dwmac is a local package, so its feed dependency is not
+          # represented by CONFIG_PACKAGE_* in ra74.config or DEVICE_PACKAGES.
+          # The NSS feed source directory is qca-nss-ecm (it provides
+          # kmod-qca-nss-ecm), not the generated kernel package name.
+          selected.add("qca-nss-ecm")
+
           for name in sorted(selected):
               print(name)
           PY
@@ -118,6 +125,13 @@ jobs:
           if (( ${#feed_packages[@]} )); then
             ./scripts/feeds install "${feed_packages[@]}"
           fi
+
+          # Fail here, with a precise diagnostic, if the NSS ECM feed source
+          # was not linked into the build tree.
+          test -f package/feeds/nss/qca-nss-ecm/Makefile || {
+            echo "::error::NSS feed package qca-nss-ecm was not installed; nss-tools-dwmac requires kmod-qca-nss-ecm."
+            exit 1
+          }
 
       - name: Resolve and validate the single-device configuration
         shell: bash
