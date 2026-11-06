@@ -382,7 +382,7 @@ jobs:
               APK_ROOT="/tmp/nss-firmware-apk"
               rm -rf "$APK_ROOT"
               mkdir -p "$APK_ROOT"
-              "$APK_TOOL" extract --no-chown --destination "$APK_ROOT" "$FWPKG"
+              "$APK_TOOL" --allow-untrusted extract --no-chown --destination "$APK_ROOT" "$FWPKG"
               FW_BIN="$APK_ROOT/lib/firmware/qca-nss0-retail.bin"
               if [[ ! -s "$FW_BIN" ]]; then
                 echo "::error::qca-nss0-retail.bin is missing from $FWPKG."
