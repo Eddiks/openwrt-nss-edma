@@ -325,7 +325,12 @@ jobs:
           grep -Fq 'modprobe qca-dsa-nss' "$UP"
           grep -Fq 'modprobe ecm front_end_selection=1' "$UP"
           grep -Fq 'modprobe ath11k' "$INIT"
-          grep -Fq 'echo "$wifi_offload" > $NSSOFF' "$INIT"
+          # The current init script writes the module parameter from wifi_load()
+          # using its local "offload" argument, not start_service's
+          # "wifi_offload" variable. With offload=1 it defers ath11k until
+          # nss-dwmac-up has armed the NSS firmware.
+          grep -Fq 'echo "$offload" > $NSSOFF' "$INIT"
+          grep -Fq 'deferring ath11k to nss-dwmac-up' "$INIT"
 
           echo "Validated: NSS package manifest, runtime files, RA74 dual-GMAC DTS, DSA conduit migration, dynamic fw_mask, Wi-Fi offload default=1, VLAN/PPPoE/DSA managers and ECM sequencing."
 
