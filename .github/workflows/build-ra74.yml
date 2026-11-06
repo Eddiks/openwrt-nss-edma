@@ -372,15 +372,23 @@ jobs:
               tar -xOzf /tmp/nss-firmware-data.tar.gz "$FW_PATH" | strings > /tmp/nss-fw-strings.txt
               ;;
             *.apk)
-              # APK is an uncompressed tar archive; its data.tar.gz member
-              # contains the package payload.
-              tar -xOf "$FWPKG" data.tar.gz > /tmp/nss-firmware-data.tar.gz
-              FW_PATH="$(tar -tzf /tmp/nss-firmware-data.tar.gz | grep -F 'qca-nss0-retail.bin' | sed -n '1p')"
-              if [[ -z "$FW_PATH" ]]; then
+              # OpenWrt builds APK packages with apk-tools (package-pack.mk).
+              # Use the matching host apk binary; .apk is not a plain tar.gz.
+              APK_TOOL="staging_dir/host/bin/apk"
+              if [[ ! -x "$APK_TOOL" ]]; then
+                echo "::error::OpenWrt host apk tool not found: $APK_TOOL"
+                exit 1
+              fi
+              APK_ROOT="/tmp/nss-firmware-apk"
+              rm -rf "$APK_ROOT"
+              mkdir -p "$APK_ROOT"
+              "$APK_TOOL" extract --no-chown --destination "$APK_ROOT" "$FWPKG"
+              FW_BIN="$APK_ROOT/lib/firmware/qca-nss0-retail.bin"
+              if [[ ! -s "$FW_BIN" ]]; then
                 echo "::error::qca-nss0-retail.bin is missing from $FWPKG."
                 exit 1
               fi
-              tar -xOzf /tmp/nss-firmware-data.tar.gz "$FW_PATH" | strings > /tmp/nss-fw-strings.txt
+              strings "$FW_BIN" > /tmp/nss-fw-strings.txt
               ;;
             *) echo "::error::Unsupported package format: $FWPKG"; exit 1 ;;
           esac
