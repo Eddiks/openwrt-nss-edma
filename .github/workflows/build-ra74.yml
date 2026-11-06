@@ -228,6 +228,7 @@ jobs:
           required_packages=(
             nss-tools-dwmac
             nss-firmware
+            nss-firmware-ipq50xx
             kmod-qca-dwmac-nss
             kmod-qca-nss-drv
             kmod-qca-nss-ecm
@@ -352,7 +353,10 @@ jobs:
           IMAGE="${images[0]}"
 
           # Verify the NSS firmware inside the actual firmware package.
-          FWPKG="$(find bin -type f \( -name 'nss-firmware*.ipk' -o -name 'nss-firmware*.apk' \) -print -quit)"
+          FWPKG="$(find bin -type f \( \
+            -name 'nss-firmware-ipq50xx*.ipk' -o \
+            -name 'nss-firmware-ipq50xx*.apk' \
+          \) -print -quit)"
           if [[ -z "$FWPKG" ]]; then
             echo "::error::The nss-firmware package was not produced."
             exit 1
