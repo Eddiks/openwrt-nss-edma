@@ -210,6 +210,81 @@ jobs:
           set -o pipefail
           make -j"$(nproc)" V=s 2>&1 | tee build.log
 
+      - name: Diagnose NSS firmware APK
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          LOG="$RUNNER_TEMP/ra74-apk-diagnostic.log"
+          exec > >(tee -a "$LOG") 2>&1
+
+          echo "===== Build information ====="
+          echo "GITHUB_SHA=$GITHUB_SHA"
+          echo "RUN_ID=$GITHUB_RUN_ID"
+          echo "RUN_NUMBER=$GITHUB_RUN_NUMBER"
+
+          echo "===== APK tool ====="
+          APK_TOOL="staging_dir/host/bin/apk"
+
+          if [[ ! -x "$APK_TOOL" ]]; then
+            echo "::error::APK tool not found: $APK_TOOL"
+            exit 1
+          fi
+
+          "$APK_TOOL" --version
+
+          echo "===== APK tool extract help ====="
+          "$APK_TOOL" extract --help
+
+          echo "===== Firmware package ====="
+          FWPKG="$(find bin -type f -name 'nss-firmware-ipq50xx*.apk' -print -quit)"
+
+          if [[ -z "$FWPKG" ]]; then
+            echo "::error::Firmware APK not found"
+            exit 1
+          fi
+
+          echo "FWPKG=$FWPKG"
+          ls -lh "$FWPKG"
+          sha256sum "$FWPKG"
+          file "$FWPKG"
+
+          echo "===== Extract APK ====="
+          APK_ROOT="$RUNNER_TEMP/nss-firmware-apk"
+          rm -rf "$APK_ROOT"
+          mkdir -p "$APK_ROOT"
+
+          "$APK_TOOL" --allow-untrusted extract \
+            --no-chown \
+            --destination "$APK_ROOT" \
+            "$FWPKG"
+
+          echo "===== Extracted files ====="
+          find "$APK_ROOT" -type f -printf '%p %s bytes\\n'
+
+          FW_BIN="$APK_ROOT/lib/firmware/qca-nss0-retail.bin"
+
+          if [[ ! -s "$FW_BIN" ]]; then
+            echo "::error::Firmware binary missing or empty"
+            exit 1
+          fi
+
+          echo "===== Firmware version ====="
+          strings "$FW_BIN" | grep -F 'NSS.FW.12.5-210'
+
+          echo "===== Diagnostic completed ====="
+
+      - name: Upload NSS diagnostic log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ra74-apk-diagnostic-${{ github.run_number }}
+          path: ${{ runner.temp }}/ra74-apk-diagnostic.log
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Verify NSS runtime packages, Wi-Fi default, and RA74 DSA path
         shell: bash
         run: |
