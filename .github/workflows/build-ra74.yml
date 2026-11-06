@@ -262,7 +262,7 @@ jobs:
             "$FWPKG"
 
           echo "===== Extracted files ====="
-          find "$APK_ROOT" -type f -printf '%p %s bytes\\n'
+          find "$APK_ROOT" -type f -printf '%p %s bytes\n'
 
           FW_BIN="$APK_ROOT/lib/firmware/qca-nss0-retail.bin"
 
