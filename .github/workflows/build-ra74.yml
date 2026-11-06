@@ -362,16 +362,33 @@ jobs:
             exit 1
           fi
           case "$FWPKG" in
-            *.ipk) ar p "$FWPKG" data.tar.gz > /tmp/nss-firmware-data.tar.gz ;;
-            *.apk) tar -xOzf "$FWPKG" data.tar.gz > /tmp/nss-firmware-data.tar.gz ;;
+            *.ipk)
+              ar p "$FWPKG" data.tar.gz > /tmp/nss-firmware-data.tar.gz
+              FW_PATH="$(tar -tzf /tmp/nss-firmware-data.tar.gz | grep -F 'qca-nss0-retail.bin' | sed -n '1p')"
+              if [[ -z "$FW_PATH" ]]; then
+                echo "::error::qca-nss0-retail.bin is missing from $FWPKG."
+                exit 1
+              fi
+              tar -xOzf /tmp/nss-firmware-data.tar.gz "$FW_PATH" | strings > /tmp/nss-fw-strings.txt
+              ;;
+            *.apk)
+              APK_TOOL="staging_dir/host/bin/apk"
+              if [[ ! -x "$APK_TOOL" ]]; then
+                echo "::error::OpenWrt host apk tool not found at $APK_TOOL."
+                exit 1
+              fi
+              APK_ROOT="/tmp/nss-firmware-apk"
+              mkdir -p "$APK_ROOT"
+              "$APK_TOOL" extract --destination "$APK_ROOT" "$FWPKG"
+              FW_BIN="$(find "$APK_ROOT" -type f -name 'qca-nss0-retail.bin' -print -quit)"
+              if [[ -z "$FW_BIN" ]]; then
+                echo "::error::qca-nss0-retail.bin is missing from $FWPKG."
+                exit 1
+              fi
+              strings "$FW_BIN" > /tmp/nss-fw-strings.txt
+              ;;
             *) echo "::error::Unsupported package format: $FWPKG"; exit 1 ;;
           esac
-          FW_PATH="$(tar -tzf /tmp/nss-firmware-data.tar.gz | grep -F 'qca-nss0-retail.bin' | sed -n '1p')"
-          if [[ -z "$FW_PATH" ]]; then
-            echo "::error::qca-nss0-retail.bin is missing from nss-firmware package."
-            exit 1
-          fi
-          tar -xOzf /tmp/nss-firmware-data.tar.gz "$FW_PATH" | strings > /tmp/nss-fw-strings.txt
           grep -F 'NSS.FW.12.5-210' /tmp/nss-fw-strings.txt
 
           # Verify the compiled board DTB contains the CPU thermal zone.
