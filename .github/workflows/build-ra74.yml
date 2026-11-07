@@ -97,7 +97,8 @@ jobs:
           # their recursive build/runtime dependencies. Installing every source
           # package in every feed parses unrelated Kconfig entries (Qt5, fwknop,
           # squeezelite) that are not part of this firmware.
-          mapfile -t feed_packages < <(python3 - <<'PY'
+          FEED_PACKAGE_LIST="$RUNNER_TEMP/ra74-feed-packages.txt"
+          python3 - <<'PY' > "$FEED_PACKAGE_LIST"
           import re
           from pathlib import Path
 
@@ -107,7 +108,7 @@ jobs:
               selected.add(name)
 
           targetinfo = Path("tmp/.targetinfo").read_text()
-          blocks = re.split(r"(?m)^Target-Profile:\s*", targetinfo)
+          blocks = re.split(r"(?m)^Target-Profile:\\s*", targetinfo)
           profile = "DEVICE_xiaomi_redmi-ax5400"
           found = False
           for block in blocks[1:]:
@@ -132,7 +133,7 @@ jobs:
           for name in sorted(selected):
               print(name)
           PY
-          )
+          mapfile -t feed_packages < "$FEED_PACKAGE_LIST"
 
           printf 'Installing %s selected/feed device packages:\n' "${#feed_packages[@]}"
           printf '  %s\n' "${feed_packages[@]}"
@@ -393,25 +394,11 @@ jobs:
             exit 1
           fi
 
-          # Confirm that the compiled hostapd configuration used by the full
-          # mbedTLS variant really contains WNM support, not just a selected package name.
-          mapfile -t hostapd_configs < <(find build_dir -type f -path '*/hostapd/.config' -print)
-          if (( ${#hostapd_configs[@]} == 0 )); then
-            echo "::error::Compiled hostapd .config was not found; cannot verify 802.11v support."
-            exit 1
-          fi
-          wnm_config_found=0
-          for cfg in "${hostapd_configs[@]}"; do
-            if grep -Fqx 'CONFIG_WNM=y' "$cfg"; then
-              wnm_config_found=1
-              echo "802.11v build config OK: $cfg"
-            fi
-          done
-          if (( wnm_config_found == 0 )); then
-            echo "::error::No compiled hostapd configuration has CONFIG_WNM=y."
-            exit 1
-          fi
-
+          # CONFIG_WNM=y is verified in the selected full-variant source
+          # configuration before compilation. OpenWrt may remove or relocate
+          # the hostapd intermediate .config after packaging, so do not make
+          # that transient build file a release gate. The shipped wpad binary
+          # is checked below for the BSS Transition Management option string.
 
           # Inspect the actual target rootfs for the runtime scripts installed
           # by nss-tools-dwmac (paths verified against its package Makefile).
