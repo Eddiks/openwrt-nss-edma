@@ -381,6 +381,36 @@ jobs:
             echo "::error::NSS LuCI menu entry admin/status/nss is missing."
             exit 1
           fi
+          # The standalone Status -> NSS Offload page must remain the
+          # detailed diagnostic view, separate from the compact Overview widget.
+          NSS_FULL="$ROOTFS/www/luci-static/resources/view/nss/status.js"
+          for label in \
+            'Heartbeat' \
+            'NSS core load' \
+            'ECM accelerated connections' \
+            'Firmware-attached ports' \
+            'Wi-Fi radios on the firmware' \
+            'Switch ports and bridges on the firmware (DSA)' \
+            'SQM shaper'; do
+            if ! grep -Fq "$label" "$NSS_FULL"; then
+              echo "::error::Standalone NSS Offload page is missing detailed section: $label"
+              exit 1
+            fi
+          done
+
+          # Status -> Overview is intentionally compact: core load, ECM
+          # accelerated connections and temperatures only, not the full report.
+          NSS_OVERVIEW="$ROOTFS/www/luci-static/resources/view/status/include/16_nss_offload.js"
+          for label in 'NSS core load' 'ECM accelerated connections' 'CPU temperature' 'NSS temperature'; do
+            if ! grep -Fq "$label" "$NSS_OVERVIEW"; then
+              echo "::error::NSS Overview summary is missing key status: $label"
+              exit 1
+            fi
+          done
+          if grep -Fq 'Firmware-attached ports' "$NSS_OVERVIEW"; then
+            echo "::error::Full NSS port diagnostics must not be embedded in the compact Overview widget."
+            exit 1
+          fi
           if ! grep -Fq 'NSS core load' "$ROOTFS/www/luci-static/resources/view/status/include/16_nss_offload.js"; then
             echo "::error::NSS overview include does not contain the NSS core load widget."
             exit 1
