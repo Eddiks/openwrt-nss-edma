@@ -369,7 +369,8 @@ jobs:
           for file in \
             usr/share/luci/menu.d/luci-app-nss.json \
             usr/share/rpcd/acl.d/luci-app-nss.json \
-            www/luci-static/resources/view/nss/status.js; do
+            www/luci-static/resources/view/nss/status.js \
+            www/luci-static/resources/view/status/include/16_nss_offload.js; do
             if [[ ! -s "$ROOTFS/$file" ]]; then
               echo "::error::NSS LuCI application file missing from rootfs: $file"
               exit 1
@@ -378,6 +379,14 @@ jobs:
           done
           if ! grep -Fq 'admin/status/nss' "$ROOTFS/usr/share/luci/menu.d/luci-app-nss.json"; then
             echo "::error::NSS LuCI menu entry admin/status/nss is missing."
+            exit 1
+          fi
+          if ! grep -Fq 'NSS core load' "$ROOTFS/www/luci-static/resources/view/status/include/16_nss_offload.js"; then
+            echo "::error::NSS overview include does not contain the NSS core load widget."
+            exit 1
+          fi
+          if ! grep -Fq 'ECM accelerated connections' "$ROOTFS/www/luci-static/resources/view/status/include/16_nss_offload.js"; then
+            echo "::error::NSS overview include does not contain ECM accelerated connections."
             exit 1
           fi
           if ! find "$ROOTFS/usr/lib/lua/luci/i18n" "$ROOTFS/usr/share" -type f -iname '*nss*zh*' -print -quit 2>/dev/null | grep -q .; then
