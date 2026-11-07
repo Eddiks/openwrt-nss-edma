@@ -306,6 +306,8 @@ jobs:
           required_packages=(
             nss-tools-dwmac
             wpad-mbedtls
+            hostapd-common
+            libmbedtls
             nss-firmware
             nss-firmware-ipq50xx
             kmod-qca-dwmac-nss
@@ -359,6 +361,22 @@ jobs:
             echo "::error::Could not locate the built target rootfs."
             exit 1
           fi
+
+          # Verify the actual wpad binary shipped in the image recognizes the
+          # 802.11v BSS Transition Management option. This catches a mismatch
+          # between the selected package, generated hostapd config and binary.
+          WPAD_BIN="$ROOTFS/usr/sbin/wpad"
+          if [[ ! -x "$WPAD_BIN" ]]; then
+            echo "::error::Full wpad binary is missing from the target rootfs."
+            exit 1
+          fi
+          strings "$WPAD_BIN" > "$RUNNER_TEMP/ra74-wpad.strings"
+          if ! grep -Fqx 'bss_transition' "$RUNNER_TEMP/ra74-wpad.strings"; then
+            echo "::error::The shipped wpad binary does not contain bss_transition; 802.11v WNM support is not verified."
+            exit 1
+          fi
+          echo "802.11v runtime binary OK: wpad contains bss_transition"
+
           for file in \
             etc/init.d/nss \
             usr/sbin/nss-dwmac-up \
