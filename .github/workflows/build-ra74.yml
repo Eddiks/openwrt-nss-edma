@@ -66,11 +66,6 @@ jobs:
           uci set wireless.radio1.htmode='HE160'
           uci set wireless.radio1.txpower='25'
 
-          # Remove unsupported hostapd options. This RA74 hostapd build rejects
-          # bss_transition and would fail to start either AP if these are present.
-          uci -q delete wireless.default_radio0.bss_transition || true
-          uci -q delete wireless.default_radio1.bss_transition || true
-
           uci commit wireless
           exit 0
           EOF
@@ -192,9 +187,10 @@ jobs:
           grep -Fqx 'CONFIG_LUCI_LANG_zh_Hans=y' .config
           grep -Fqx 'CONFIG_ATH11K_THERMAL=y' .config
 
-          # Ensure first-boot wireless defaults remove hostapd's unsupported option.
-          grep -Fq "uci -q delete wireless.default_radio0.bss_transition" .github/workflows/build-ra74.yml
-          grep -Fq "uci -q delete wireless.default_radio1.bss_transition" .github/workflows/build-ra74.yml
+          # 802.11v requires the full WNM-enabled wpad build.
+          grep -Fqx 'CONFIG_PACKAGE_wpad-mbedtls=y' .config
+          ! grep -Fqx 'CONFIG_PACKAGE_wpad-basic-mbedtls=y' .config
+          grep -Fqx 'CONFIG_WNM=y' package/network/services/hostapd/files/hostapd-full.config
 
           if grep -Fqx 'CONFIG_MAGIC_SYSRQ_SERIAL=y' .config || grep -Fqx 'CONFIG_DEVMEM=y' .config; then
             echo "::error::Temporary bring-up debug options are enabled; deployment build blocked."
@@ -311,6 +307,7 @@ jobs:
           # PPPoE and netlink are selected explicitly by the RA74 config.
           required_packages=(
             nss-tools-dwmac
+            wpad-mbedtls
             nss-firmware
             nss-firmware-ipq50xx
             kmod-qca-dwmac-nss
@@ -331,6 +328,31 @@ jobs:
             fi
             echo "Manifest OK: $pkg"
           done
+
+          if grep -Eq '^wpad-basic-mbedtls[[:space:]]+-' "$MANIFEST"; then
+            echo "::error::Basic wpad variant is forbidden; it lacks CONFIG_WNM for 802.11v."
+            exit 1
+          fi
+
+          # Confirm that the compiled hostapd configuration used by the full
+          # mbedTLS variant really contains WNM support, not just a selected package name.
+          mapfile -t hostapd_configs < <(find build_dir -type f -path '*/hostapd/.config' -print)
+          if (( ${#hostapd_configs[@]} == 0 )); then
+            echo "::error::Compiled hostapd .config was not found; cannot verify 802.11v support."
+            exit 1
+          fi
+          wnm_config_found=0
+          for cfg in "${hostapd_configs[@]}"; do
+            if grep -Fqx 'CONFIG_WNM=y' "$cfg"; then
+              wnm_config_found=1
+              echo "802.11v build config OK: $cfg"
+            fi
+          done
+          if (( wnm_config_found == 0 )); then
+            echo "::error::No compiled hostapd configuration has CONFIG_WNM=y."
+            exit 1
+          fi
+
 
           # Inspect the actual target rootfs for the runtime scripts installed
           # by nss-tools-dwmac (paths verified against its package Makefile).
