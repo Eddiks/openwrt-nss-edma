@@ -108,7 +108,7 @@ jobs:
               selected.add(name)
 
           targetinfo = Path("tmp/.targetinfo").read_text()
-          blocks = re.split(r"(?m)^Target-Profile:\\s*", targetinfo)
+          blocks = re.split(r"(?m)^Target-Profile:\s*", targetinfo)
           profile = "DEVICE_xiaomi_redmi-ax5400"
           found = False
           for block in blocks[1:]:
