@@ -1,7 +1,14 @@
 name: Build Redmi AX5400 RA74 (NSS)
 
 on:
+  # Keep manual runs available and automatically build whenever the RA74
+  # branch is updated. workflow_dispatch is only offered for workflows
+  # recognized on the repository default branch; push is the reliable
+  # branch-local trigger after syncing upstream.
   workflow_dispatch:
+  push:
+    branches:
+      - ra74-luci-zh-cn
 
 permissions:
   contents: write
