@@ -328,6 +328,17 @@ jobs:
             exit 1
           fi
 
+          # Resolve the ABI-versioned APK name from the package Makefile.
+          # CONFIG_PACKAGE_libmbedtls selects the logical package; the final
+          # manifest uses libmbedtls21 when ABI_VERSION is 21.
+          MBEDTLS_ABI_VERSION="$(sed -n 's/^[[:space:]]*ABI_VERSION:=[[:space:]]*//p' package/libs/mbedtls/Makefile | head -n1)"
+          if [[ -z "$MBEDTLS_ABI_VERSION" ]]; then
+            echo "::error::Could not determine libmbedtls ABI_VERSION from its Makefile."
+            exit 1
+          fi
+          MBEDTLS_MANIFEST_PACKAGE="libmbedtls${MBEDTLS_ABI_VERSION}"
+          echo "Checking mbedTLS manifest package: $MBEDTLS_MANIFEST_PACKAGE"
+
           # These must be present in the final image, not merely selected
           # in .config. nss-tools-dwmac pulls in the IPQ50xx wired stack;
           # PPPoE and netlink are selected explicitly by the RA74 config.
@@ -337,7 +348,7 @@ jobs:
             luci-i18n-nss-zh-cn
             wpad-mbedtls
             hostapd-common
-            libmbedtls
+            "$MBEDTLS_MANIFEST_PACKAGE"
             nss-firmware
             nss-firmware-ipq50xx
             kmod-qca-dwmac-nss
