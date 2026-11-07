@@ -684,7 +684,8 @@ define Device/xiaomi_redmi-ax5400
 		luci \
 		luci-i18n-base-zh-cn \
 		luci-app-nss \
-		luci-i18n-nss-zh-cn
+		luci-i18n-nss-zh-cn \
+		libmbedtls
 endef
 TARGET_DEVICES += xiaomi_redmi-ax5400
 
