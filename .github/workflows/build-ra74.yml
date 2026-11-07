@@ -205,6 +205,24 @@ jobs:
           # 802.11v requires the full WNM-enabled wpad build.
           grep -Fqx 'CONFIG_PACKAGE_wpad-mbedtls=y' .config
           grep -Fqx 'CONFIG_PACKAGE_libmbedtls=y' .config
+ 
+          # Guard the actual RA74 image profile as well as .config: this
+          # prevents a future DEVICE_PACKAGES edit from silently dropping it.
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          source = Path("target/linux/qualcommax/image/ipq50xx.mk").read_text()
+          start = source.find("define Device/xiaomi_redmi-ax5400")
+          if start < 0:
+              raise SystemExit("RA74 device profile is missing")
+          end = source.find("\nendef", start)
+          if end < 0:
+              raise SystemExit("RA74 device profile has no endef")
+          profile = source[start:end]
+          if not re.search(r"(?m)^\s*libmbedtls\s*\\?$", profile):
+              raise SystemExit("RA74 DEVICE_PACKAGES does not include libmbedtls")
+          PY
           if grep -Eq '^CONFIG_PACKAGE_wpad-basic-mbedtls=(y|m)$' .config; then
             echo "::error::wpad-basic-mbedtls is still selected; the full wpad variant must replace it."
             exit 1
