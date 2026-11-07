@@ -197,7 +197,7 @@ jobs:
           grep -Fqx 'CONFIG_PACKAGE_sqm-scripts-nss=y' .config
           ! grep -Fqx 'CONFIG_NSS_FIRMWARE_VERSION_12_2=y' .config
 
-          grep -Fqx 'CONFIG_PACKAGE_luci-app-nss=m' .config
+          grep -Fqx 'CONFIG_PACKAGE_luci-app-nss=y' .config
           grep -Fqx 'CONFIG_LUCI_LANG_zh_Hans=y' .config
           grep -Fqx 'CONFIG_ATH11K_THERMAL=y' .config
 
