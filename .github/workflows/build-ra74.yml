@@ -196,7 +196,23 @@ jobs:
 
           # 802.11v requires the full WNM-enabled wpad build.
           grep -Fqx 'CONFIG_PACKAGE_wpad-mbedtls=y' .config
-          if grep -Eq '^CONFIG_PACKAGE_wpad-basic-mbedtls=(y|m)
+          if grep -Eq '^CONFIG_PACKAGE_wpad-basic-mbedtls=(y|m)$' .config; then
+            echo "::error::wpad-basic-mbedtls is still selected; the full wpad variant must replace it."
+            exit 1
+          fi
+          grep -Fqx 'CONFIG_WNM=y' package/network/services/hostapd/files/hostapd-full.config
+
+          # Verify RA74 first-boot wireless defaults and script syntax.
+          WIRELESS_DEFAULTS="files/etc/uci-defaults/99-ra74-wireless"
+          grep -Fqx "uci set wireless.radio0.channel='1'" "$WIRELESS_DEFAULTS"
+          grep -Fqx "uci set wireless.radio0.htmode='HE40'" "$WIRELESS_DEFAULTS"
+          grep -Fqx "uci set wireless.radio0.noscan='1'" "$WIRELESS_DEFAULTS"
+          bash -n "$WIRELESS_DEFAULTS"
+
+          if grep -Fqx 'CONFIG_MAGIC_SYSRQ_SERIAL=y' .config || grep -Fqx 'CONFIG_DEVMEM=y' .config; then
+            echo "::error::Temporary bring-up debug options are enabled; deployment build blocked."
+            exit 1
+          fi
 
           # Verify the checked-in IPQ5018 kernel config retains thermal support.
           grep -Fqx 'CONFIG_QCOM_TSENS=y' target/linux/qualcommax/config-6.18
