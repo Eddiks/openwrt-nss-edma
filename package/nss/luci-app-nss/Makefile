@@ -16,7 +16,8 @@ LUCI_TITLE:=LuCI status page for NSS offloading
 LUCI_DESCRIPTION:=Status -> NSS Offload: renders 'nss-status -j' (firmware state, \
  cores, ports, Wi-Fi radios, ECM acceleration counts, SQM and fast-lane health), and \
  adds the NSS core load and the ECM-accelerated connections to Status -> Overview.
-LUCI_DEPENDS:=+luci-base +TARGET_qualcommax_ipq50xx:nss-tools-dwmac \
+LUCI_DEPENDS:=+luci-base +luci-mod-status \
+	+TARGET_qualcommax_ipq50xx:nss-tools-dwmac \
 	+!TARGET_qualcommax_ipq50xx:nss-tools
 LUCI_PKGARCH:=all
 
