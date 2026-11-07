@@ -66,6 +66,11 @@ jobs:
           uci set wireless.radio1.htmode='HE160'
           uci set wireless.radio1.txpower='25'
 
+          # Remove unsupported hostapd options. This RA74 hostapd build rejects
+          # bss_transition and would fail to start either AP if these are present.
+          uci -q delete wireless.default_radio0.bss_transition || true
+          uci -q delete wireless.default_radio1.bss_transition || true
+
           uci commit wireless
           exit 0
           EOF
@@ -186,6 +191,10 @@ jobs:
           grep -Fqx 'CONFIG_PACKAGE_luci-app-nss=m' .config
           grep -Fqx 'CONFIG_LUCI_LANG_zh_Hans=y' .config
           grep -Fqx 'CONFIG_ATH11K_THERMAL=y' .config
+
+          # Ensure first-boot wireless defaults remove hostapd's unsupported option.
+          grep -Fq "uci -q delete wireless.default_radio0.bss_transition" .github/workflows/build-ra74.yml
+          grep -Fq "uci -q delete wireless.default_radio1.bss_transition" .github/workflows/build-ra74.yml
 
           if grep -Fqx 'CONFIG_MAGIC_SYSRQ_SERIAL=y' .config || grep -Fqx 'CONFIG_DEVMEM=y' .config; then
             echo "::error::Temporary bring-up debug options are enabled; deployment build blocked."
