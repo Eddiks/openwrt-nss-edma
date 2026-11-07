@@ -204,6 +204,7 @@ jobs:
 
           # 802.11v requires the full WNM-enabled wpad build.
           grep -Fqx 'CONFIG_PACKAGE_wpad-mbedtls=y' .config
+          grep -Fqx 'CONFIG_PACKAGE_libmbedtls=y' .config
           if grep -Eq '^CONFIG_PACKAGE_wpad-basic-mbedtls=(y|m)$' .config; then
             echo "::error::wpad-basic-mbedtls is still selected; the full wpad variant must replace it."
             exit 1
