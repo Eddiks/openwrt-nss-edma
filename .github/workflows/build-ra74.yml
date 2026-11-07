@@ -59,6 +59,13 @@ jobs:
           [ "$(uci -q get wireless.radio1.band)" = "5g" ] || exit 1
 
           uci set wireless.radio0.country='US'
+          # Request 2.4 GHz HE40 on channel 1. noscan=1 skips the OBSS
+          # overlap scan that previously forced this radio back to 20 MHz.
+          # This is an explicit performance/compatibility trade-off in a
+          # congested 2.4 GHz band; regulatory/driver limits still apply.
+          uci set wireless.radio0.channel='1'
+          uci set wireless.radio0.htmode='HE40'
+          uci set wireless.radio0.noscan='1'
           uci set wireless.radio0.txpower='25'
 
           uci set wireless.radio1.country='US'
@@ -190,6 +197,880 @@ jobs:
           # 802.11v requires the full WNM-enabled wpad build.
           grep -Fqx 'CONFIG_PACKAGE_wpad-mbedtls=y' .config
           if grep -Eq '^CONFIG_PACKAGE_wpad-basic-mbedtls=(y|m)
+            echo "::error::Temporary bring-up debug options are enabled; deployment build blocked."
+            exit 1
+          fi
+
+          # Verify the checked-in IPQ5018 kernel config retains thermal support.
+          grep -Fqx 'CONFIG_QCOM_TSENS=y' target/linux/qualcommax/config-6.18
+          grep -Fqx 'CONFIG_CPU_THERMAL=y' target/linux/qualcommax/config-6.18
+          grep -Fqx 'CONFIG_CPU_FREQ_THERMAL=y' target/linux/qualcommax/config-6.18
+          grep -Fqx 'CONFIG_THERMAL_DEFAULT_GOV_STEP_WISE=y' target/linux/qualcommax/config-6.18
+          grep -Fqx 'CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y' target/linux/qualcommax/config-6.18
+
+          echo "Validated: RA74 only, NSS 12.5, LuCI Chinese, ath11k and CPU thermal support."
+
+      - name: Clean ath11k/mac80211 conditional build
+        run: make package/kernel/mac80211/clean
+
+      - name: Build firmware
+        shell: bash
+        run: |
+          set -o pipefail
+          make -j"$(nproc)" V=s 2>&1 | tee build.log
+
+      - name: Diagnose NSS firmware APK
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          LOG="$RUNNER_TEMP/ra74-apk-diagnostic.log"
+          exec > >(tee -a "$LOG") 2>&1
+
+          echo "===== Build information ====="
+          echo "GITHUB_SHA=$GITHUB_SHA"
+          echo "RUN_ID=$GITHUB_RUN_ID"
+          echo "RUN_NUMBER=$GITHUB_RUN_NUMBER"
+
+          echo "===== APK tool ====="
+          APK_TOOL="staging_dir/host/bin/apk"
+
+          if [[ ! -x "$APK_TOOL" ]]; then
+            echo "::error::APK tool not found: $APK_TOOL"
+            exit 1
+          fi
+
+          "$APK_TOOL" --version
+
+          echo "===== APK tool extract help ====="
+          "$APK_TOOL" extract --help
+
+          echo "===== Firmware package ====="
+          FWPKG="$(find bin -type f -name 'nss-firmware-ipq50xx*.apk' -print -quit)"
+
+          if [[ -z "$FWPKG" ]]; then
+            echo "::error::Firmware APK not found"
+            exit 1
+          fi
+
+          echo "FWPKG=$FWPKG"
+          ls -lh "$FWPKG"
+          sha256sum "$FWPKG"
+          file "$FWPKG"
+
+          echo "===== Extract APK ====="
+          APK_ROOT="$RUNNER_TEMP/nss-firmware-apk"
+          rm -rf "$APK_ROOT"
+          mkdir -p "$APK_ROOT"
+
+          "$APK_TOOL" --allow-untrusted extract \
+            --no-chown \
+            --destination "$APK_ROOT" \
+            "$FWPKG"
+
+          echo "===== Extracted files ====="
+          find "$APK_ROOT" -type f -printf '%p %s bytes\n'
+
+          FW_BIN="$APK_ROOT/lib/firmware/qca-nss0-retail.bin"
+
+          if [[ ! -s "$FW_BIN" ]]; then
+            echo "::error::Firmware binary missing or empty"
+            exit 1
+          fi
+
+          echo "===== Firmware version ====="
+          strings "$FW_BIN" | grep -F 'NSS.FW.12.5-210'
+
+          echo "===== Diagnostic completed ====="
+
+      - name: Upload NSS diagnostic log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ra74-apk-diagnostic-${{ github.run_number }}
+          path: ${{ runner.temp }}/ra74-apk-diagnostic.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Verify NSS runtime packages, Wi-Fi default, and RA74 DSA path
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          IMAGE_DIR="bin/targets/qualcommax/ipq50xx"
+          MANIFEST="$(find "$IMAGE_DIR" -maxdepth 1 -type f -name '*.manifest' -print -quit)"
+          if [[ -z "$MANIFEST" ]]; then
+            echo "::error::The RA74 package manifest was not produced."
+            exit 1
+          fi
+
+          # These must be present in the final image, not merely selected
+          # in .config. nss-tools-dwmac pulls in the IPQ50xx wired stack;
+          # PPPoE and netlink are selected explicitly by the RA74 config.
+          required_packages=(
+            nss-tools-dwmac
+            luci-app-nss
+            luci-i18n-nss-zh-cn
+            wpad-mbedtls
+            hostapd-common
+            libmbedtls
+            nss-firmware
+            nss-firmware-ipq50xx
+            kmod-qca-dwmac-nss
+            kmod-qca-nss-drv
+            kmod-qca-nss-ecm
+            kmod-qca-nss-drv-vlan-mgr
+            kmod-qca-dsa-nss
+            kmod-qca8337-nss
+            kmod-qca-nss-drv-pppoe
+            kmod-qca-nss-drv-netlink
+            kmod-ppp
+            kmod-pppoe
+          )
+          for pkg in "${required_packages[@]}"; do
+            if ! grep -Eq "^${pkg}[[:space:]]+-" "$MANIFEST"; then
+              echo "::error::Required package missing from final image manifest: $pkg"
+              exit 1
+            fi
+            echo "Manifest OK: $pkg"
+          done
+
+          if grep -Eq '^wpad-basic-mbedtls[[:space:]]+-' "$MANIFEST"; then
+            echo "::error::Basic wpad variant is forbidden; it lacks CONFIG_WNM for 802.11v."
+            exit 1
+          fi
+
+          # Confirm that the compiled hostapd configuration used by the full
+          # mbedTLS variant really contains WNM support, not just a selected package name.
+          mapfile -t hostapd_configs < <(find build_dir -type f -path '*/hostapd/.config' -print)
+          if (( ${#hostapd_configs[@]} == 0 )); then
+            echo "::error::Compiled hostapd .config was not found; cannot verify 802.11v support."
+            exit 1
+          fi
+          wnm_config_found=0
+          for cfg in "${hostapd_configs[@]}"; do
+            if grep -Fqx 'CONFIG_WNM=y' "$cfg"; then
+              wnm_config_found=1
+              echo "802.11v build config OK: $cfg"
+            fi
+          done
+          if (( wnm_config_found == 0 )); then
+            echo "::error::No compiled hostapd configuration has CONFIG_WNM=y."
+            exit 1
+          fi
+
+
+          # Inspect the actual target rootfs for the runtime scripts installed
+          # by nss-tools-dwmac (paths verified against its package Makefile).
+          ROOTFS="$(find build_dir/target-* -maxdepth 2 -type d -name 'root-*' -print -quit)"
+          if [[ -z "$ROOTFS" ]]; then
+            echo "::error::Could not locate the built target rootfs."
+            exit 1
+          fi
+
+          # Verify the NSS LuCI application is actually installed in the
+          # RA74 rootfs, not merely selected or built as an optional package.
+          for file in \
+            usr/share/luci/menu.d/luci-app-nss.json \
+            usr/share/rpcd/acl.d/luci-app-nss.json \
+            www/luci-static/resources/view/nss/status.js \
+            www/luci-static/resources/view/status/include/16_nss_offload.js; do
+            if [[ ! -s "$ROOTFS/$file" ]]; then
+              echo "::error::NSS LuCI application file missing from rootfs: $file"
+              exit 1
+            fi
+            echo "NSS LuCI file OK: $file"
+          done
+          if ! grep -Fq 'admin/status/nss' "$ROOTFS/usr/share/luci/menu.d/luci-app-nss.json"; then
+            echo "::error::NSS LuCI menu entry admin/status/nss is missing."
+            exit 1
+          fi
+          # The standalone Status -> NSS Offload page must remain the
+          # detailed diagnostic view, separate from the compact Overview widget.
+          NSS_FULL="$ROOTFS/www/luci-static/resources/view/nss/status.js"
+          for label in \
+            'Heartbeat' \
+            'NSS core load' \
+            'ECM accelerated connections' \
+            'Firmware-attached ports' \
+            'Wi-Fi radios on the firmware' \
+            'Switch ports and bridges on the firmware (DSA)' \
+            'SQM shaper'; do
+            if ! grep -Fq "$label" "$NSS_FULL"; then
+              echo "::error::Standalone NSS Offload page is missing detailed section: $label"
+              exit 1
+            fi
+          done
+
+          # Status -> Overview is intentionally compact: core load, ECM
+          # accelerated connections and temperatures only, not the full report.
+          NSS_OVERVIEW="$ROOTFS/www/luci-static/resources/view/status/include/16_nss_offload.js"
+          for label in 'NSS core load' 'ECM accelerated connections' 'CPU temperature' 'NSS temperature'; do
+            if ! grep -Fq "$label" "$NSS_OVERVIEW"; then
+              echo "::error::NSS Overview summary is missing key status: $label"
+              exit 1
+            fi
+          done
+          if grep -Fq 'Firmware-attached ports' "$NSS_OVERVIEW"; then
+            echo "::error::Full NSS port diagnostics must not be embedded in the compact Overview widget."
+            exit 1
+          fi
+          if ! grep -Fq 'NSS core load' "$ROOTFS/www/luci-static/resources/view/status/include/16_nss_offload.js"; then
+            echo "::error::NSS overview include does not contain the NSS core load widget."
+            exit 1
+          fi
+          if ! grep -Fq 'ECM accelerated connections' "$ROOTFS/www/luci-static/resources/view/status/include/16_nss_offload.js"; then
+            echo "::error::NSS overview include does not contain ECM accelerated connections."
+            exit 1
+          fi
+          if ! find "$ROOTFS/usr/lib/lua/luci/i18n" "$ROOTFS/usr/share" -type f -iname '*nss*zh*' -print -quit 2>/dev/null | grep -q .; then
+            echo "::error::Simplified Chinese NSS LuCI translation was not found in the rootfs."
+            exit 1
+          fi
+
+          # Verify the actual wpad binary shipped in the image recognizes the
+          # 802.11v BSS Transition Management option. This catches a mismatch
+          # between the selected package, generated hostapd config and binary.
+          WPAD_BIN="$ROOTFS/usr/sbin/wpad"
+          if [[ ! -x "$WPAD_BIN" ]]; then
+            echo "::error::Full wpad binary is missing from the target rootfs."
+            exit 1
+          fi
+          strings "$WPAD_BIN" > "$RUNNER_TEMP/ra74-wpad.strings"
+          if ! grep -Fqx 'bss_transition' "$RUNNER_TEMP/ra74-wpad.strings"; then
+            echo "::error::The shipped wpad binary does not contain bss_transition; 802.11v WNM support is not verified."
+            exit 1
+          fi
+          echo "802.11v runtime binary OK: wpad contains bss_transition"
+
+          for file in \
+            etc/uci-defaults/99-ra74-wireless \
+            etc/init.d/nss \
+            usr/sbin/nss-dwmac-up \
+            usr/sbin/nss-dwmac-probe \
+            usr/sbin/nss-status \
+            lib/nss/functions.sh \
+            etc/uci-defaults/98-nss-offload \
+            etc/uci-defaults/99-nss-topology; do
+            test -s "$ROOTFS/$file" || {
+              echo "::error::NSS runtime file missing from target rootfs: $file"
+              exit 1
+            }
+            echo "Rootfs OK: $file"
+          done
+
+          # The installed first-boot script must preserve the 2.4 GHz HE40 defaults.
+          WIFI_DEFAULTS="$ROOTFS/etc/uci-defaults/99-ra74-wireless"
+          grep -Fqx "uci set wireless.radio0.channel='1'" "$WIFI_DEFAULTS"
+          grep -Fqx "uci set wireless.radio0.htmode='HE40'" "$WIFI_DEFAULTS"
+          grep -Fqx "uci set wireless.radio0.noscan='1'" "$WIFI_DEFAULTS"
+
+          # Confirm that the RA74 DTS exposes both GMACs and the QCA8337's
+          # two CPU links: port 5 -> GMAC0 (PHY-to-PHY WAN link), port 6 -> GMAC1 (SGMII).
+          DTS="target/linux/qualcommax/dts/ipq5018-redmi-ax5400.dts"
+          grep -Fqx '#include "ipq5018-nss.dtsi"' "$DTS"
+          grep -A8 '^&gmac0 {' "$DTS" | grep -Fq 'status = "okay";'
+          grep -A12 '^&gmac1 {' "$DTS" | grep -Fq 'status = "okay";'
+          grep -Fq 'compatible = "qca,qca8337";' "$DTS"
+          grep -A8 'ethernet-port@5 {' "$DTS" | grep -Fq 'ethernet = <&gmac0>;'
+          grep -A10 'ethernet-port@6 {' "$DTS" | grep -Fq 'ethernet = <&gmac1>;'
+          grep -Fq 'qca,sgmii-enable-pll;' "$DTS"
+
+          # The stock board network map initially splits the DSA ports:
+          # LAN1-3 on eth1 and WAN on eth0. The DSA defaults must reconcile
+          # that split instead of hard-coding a fw_mask for the two GMACs.
+          BOARD_NET="target/linux/qualcommax/ipq50xx/base-files/etc/board.d/02_network"
+          for line in \
+            'ucidef_set_network_device_conduit "lan1" "eth1"' \
+            'ucidef_set_network_device_conduit "lan2" "eth1"' \
+            'ucidef_set_network_device_conduit "lan3" "eth1"' \
+            'ucidef_set_network_device_conduit "wan" "eth0"'; do
+            grep -Fq "$line" "$BOARD_NET" || {
+              echo "::error::RA74 board DSA conduit mapping missing: $line"
+              exit 1
+            }
+          done
+
+          DEFAULTS="package/nss/nss-tools/files/nss-dwmac.defaults"
+          INIT="package/nss/nss-tools/files/nss-dwmac.init"
+          UP="package/nss/nss-tools/files/nss-dwmac-up"
+          FUNCS="package/nss/nss-tools/files/functions.sh"
+
+          # Require the upstream C-3PO DSA path: retain the DSA switch,
+          # select topology=dsa, turn Wi-Fi offload on by default if unset,
+          # and merge the RA74 split conduits based on the actual board map.
+          grep -Fq 'if c3po_switch_bound; then' "$DEFAULTS"
+          grep -Fq "uci set nss.general.topology='dsa'" "$DEFAULTS"
+          grep -Fq "uci set nss.general.wifi_offload='1'" "$DEFAULTS"
+          grep -Fq 'dsa_board_conduits' "$DEFAULTS"
+          grep -Fq 'main_conduit' "$DEFAULTS"
+          grep -Fq 'if [ "$topology" = "dsa" ]; then' "$INIT"
+          grep -Fq 'switch_to_8021q' "$INIT"
+          grep -Fq 'nss_gmac_netdevs' "$INIT"
+          grep -Fq 'ifmap="$ifmap"' "$INIT"
+          grep -Fq 'nss_dsa_conduit' "$FUNCS"
+          grep -Fq 'nss_dsa_fw_mask' "$UP"
+          grep -Fq 'echo "$MASK" > $FWM' "$UP"
+
+          # Require correct sequencing: arm first, then ath11k/Wi-Fi and
+          # firmware VLAN / DSA managers / ECM / PPPoE managers.
+          grep -Fq 'poll_until 15 fw_started' "$UP"
+          grep -Fq 'wifi_load_now 1' "$UP"
+          grep -Fq 'modprobe qca-nss-vlan' "$UP"
+          grep -Fq 'modprobe qca-nss-pppoe' "$UP"
+          grep -Fq 'modprobe qca-dsa-nss' "$UP"
+          grep -Fq 'modprobe ecm front_end_selection=1' "$UP"
+          grep -Fq 'modprobe ath11k' "$INIT"
+          # The current init script writes the module parameter from wifi_load()
+          # using its local "offload" argument, not start_service's
+          # "wifi_offload" variable. With offload=1 it defers ath11k until
+          # nss-dwmac-up has armed the NSS firmware.
+          grep -Fq 'echo "$offload" > $NSSOFF' "$INIT"
+          grep -Fq 'deferring ath11k to nss-dwmac-up' "$INIT"
+
+          echo "Validated: NSS package manifest, runtime files, RA74 dual-GMAC DTS, DSA conduit migration, dynamic fw_mask, Wi-Fi offload default=1, VLAN/PPPoE/DSA managers and ECM sequencing."
+
+      - name: Verify RA74 image, NSS firmware, and thermal device tree
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          IMAGE_DIR="bin/targets/qualcommax/ipq50xx"
+          test -d "$IMAGE_DIR"
+          find "$IMAGE_DIR" -maxdepth 1 -type f -printf '%f\n' | sort
+
+          mapfile -t images < <(find "$IMAGE_DIR" -maxdepth 1 -type f -name '*xiaomi_redmi-ax5400*squashfs-sysupgrade.bin' -print)
+          if (( ${#images[@]} != 1 )); then
+            echo "::error::Expected exactly one RA74 sysupgrade image; found ${#images[@]}."
+            printf '%s\n' "${images[@]}"
+            exit 1
+          fi
+          IMAGE="${images[0]}"
+
+          # Verify the NSS firmware inside the actual firmware package.
+          FWPKG="$(find bin -type f \( \
+            -name 'nss-firmware-ipq50xx*.ipk' -o \
+            -name 'nss-firmware-ipq50xx*.apk' \
+          \) -print -quit)"
+          if [[ -z "$FWPKG" ]]; then
+            echo "::error::The nss-firmware package was not produced."
+            exit 1
+          fi
+          case "$FWPKG" in
+            *.ipk)
+              ar p "$FWPKG" data.tar.gz > /tmp/nss-firmware-data.tar.gz
+              FW_PATH="$(tar -tzf /tmp/nss-firmware-data.tar.gz | grep -F 'qca-nss0-retail.bin' | sed -n '1p')"
+              if [[ -z "$FW_PATH" ]]; then
+                echo "::error::qca-nss0-retail.bin is missing from $FWPKG."
+                exit 1
+              fi
+              tar -xOzf /tmp/nss-firmware-data.tar.gz "$FW_PATH" | strings > /tmp/nss-fw-strings.txt
+              ;;
+            *.apk)
+              # OpenWrt builds APK packages with apk-tools (package-pack.mk).
+              # Use the matching host apk binary; .apk is not a plain tar.gz.
+              APK_TOOL="staging_dir/host/bin/apk"
+              if [[ ! -x "$APK_TOOL" ]]; then
+                echo "::error::OpenWrt host apk tool not found: $APK_TOOL"
+                exit 1
+              fi
+              APK_ROOT="/tmp/nss-firmware-apk"
+              rm -rf "$APK_ROOT"
+              mkdir -p "$APK_ROOT"
+              "$APK_TOOL" --allow-untrusted extract --no-chown --destination "$APK_ROOT" "$FWPKG"
+              FW_BIN="$APK_ROOT/lib/firmware/qca-nss0-retail.bin"
+              if [[ ! -s "$FW_BIN" ]]; then
+                echo "::error::qca-nss0-retail.bin is missing from $FWPKG."
+                exit 1
+              fi
+              strings "$FW_BIN" > /tmp/nss-fw-strings.txt
+              ;;
+            *) echo "::error::Unsupported package format: $FWPKG"; exit 1 ;;
+          esac
+          grep -F 'NSS.FW.12.5-210' /tmp/nss-fw-strings.txt
+
+          # Verify the compiled board DTB contains the CPU thermal zone.
+          DTB="$(find build_dir -type f -name 'image-ipq5018-redmi-ax5400.dtb' -print -quit)"
+          if [[ -z "$DTB" ]]; then
+            echo "::error::RA74 device tree blob was not found."
+            exit 1
+          fi
+          dtc -I dtb -O dts "$DTB" > /tmp/ra74-device-tree.dts
+          grep -F 'cpu-thermal' /tmp/ra74-device-tree.dts
+          grep -F 'thermal-sensor' /tmp/ra74-device-tree.dts
+          grep -F 'cpu-passive' /tmp/ra74-device-tree.dts
+          grep -F 'cooling-device' /tmp/ra74-device-tree.dts
+
+          # Preserve the upstream OpenWrt sysupgrade filename.
+          mkdir -p release
+          cp "$IMAGE" release/
+          sha256sum "release/$(basename "$IMAGE")" > "release/$(basename "$IMAGE").sha256"
+          cp "$IMAGE_DIR"/*.manifest release/ 2>/dev/null || true
+          cp .config release/config.buildinfo
+          cp feeds.conf.default release/feeds.conf.default
+          {
+            echo "Device: Xiaomi Redmi AX5400 RA74"
+            echo "Target: qualcommax/ipq50xx"
+            echo "NSS firmware: 12.5-210"
+            echo "Switch topology: upstream DSA (tag_8021q), runtime conduit/fw_mask detection"
+            echo "Wi-Fi NSS offload: enabled by DSA first-boot default when unset (nss.general.wifi_offload=1)"
+            echo "Country: US"
+            echo "5 GHz: channel 36, HE160"
+            echo "TX power request: 25 dBm (subject to regulatory and driver limits)"
+            echo "Thermal: QCOM TSENS + CPU thermal governor + ath11k thermal support"
+            echo "Source commit: $GITHUB_SHA"
+            for feed in packages luci routing telephony video nss; do
+              if [[ -d "feeds/$feed/.git" ]]; then
+                printf 'Feed %s: %s\n' "$feed" "$(git -C "feeds/$feed" rev-parse HEAD)"
+              fi
+            done
+          } > release/BUILD-INFO.txt
+
+          RELEASE_DATE="$(date -u +%Y.%m.%d)"
+          RELEASE_TAG="ipq50xx-${RELEASE_DATE}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+            RELEASE_TAG="${RELEASE_TAG}-ra74-run${GITHUB_RUN_NUMBER}"
+          fi
+          echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
+          sha256sum "$IMAGE"
+
+      - name: Publish firmware to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
+          name: "Redmi AX5400 RA74 — NSS 12.5 — ${{ env.RELEASE_TAG }}"
+          body: |
+            Xiaomi Redmi AX5400 (RA74) only.
+            - NSS firmware: 12.5-210
+            - Switch topology: upstream DSA / tag_8021q; conduit and GMAC mask detected at boot
+            - Wi-Fi NSS offload: DSA first-boot default enabled (unless overridden in UCI)
+            - 5 GHz default: channel 36, HE160 (DFS may apply to the full 160 MHz block)
+            - Country code: US
+            - TX power setting: 25 dBm requested; actual output is limited by regulatory domain and driver
+            - CPU and ath11k thermal monitoring/throttling support are enabled
+            - Built from commit: ${{ github.sha }}
+            - Sysupgrade image only; not a stock factory/recovery image.
+          files: |
+            release/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+
+      - name: Upload RA74 build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Redmi-AX5400-RA74-NSS-${{ github.run_number }}
+          path: |
+            bin/targets/qualcommax/ipq50xx/
+            build.log
+          if-no-files-found: error
+          retention-days: 14
+ .config; then
+            echo "::error::wpad-basic-mbedtls is still selected; the full wpad variant must replace it."
+            exit 1
+          fi
+          grep -Fqx 'CONFIG_WNM=y' package/network/services/hostapd/files/hostapd-full.config
+
+          if grep -Fqx 'CONFIG_MAGIC_SYSRQ_SERIAL=y' .config || grep -Fqx 'CONFIG_DEVMEM=y' .config; then
+            echo "::error::Temporary bring-up debug options are enabled; deployment build blocked."
+            exit 1
+          fi
+
+          # Verify the checked-in IPQ5018 kernel config retains thermal support.
+          grep -Fqx 'CONFIG_QCOM_TSENS=y' target/linux/qualcommax/config-6.18
+          grep -Fqx 'CONFIG_CPU_THERMAL=y' target/linux/qualcommax/config-6.18
+          grep -Fqx 'CONFIG_CPU_FREQ_THERMAL=y' target/linux/qualcommax/config-6.18
+          grep -Fqx 'CONFIG_THERMAL_DEFAULT_GOV_STEP_WISE=y' target/linux/qualcommax/config-6.18
+          grep -Fqx 'CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y' target/linux/qualcommax/config-6.18
+
+          echo "Validated: RA74 only, NSS 12.5, LuCI Chinese, ath11k and CPU thermal support."
+
+      - name: Clean ath11k/mac80211 conditional build
+        run: make package/kernel/mac80211/clean
+
+      - name: Build firmware
+        shell: bash
+        run: |
+          set -o pipefail
+          make -j"$(nproc)" V=s 2>&1 | tee build.log
+
+      - name: Diagnose NSS firmware APK
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          LOG="$RUNNER_TEMP/ra74-apk-diagnostic.log"
+          exec > >(tee -a "$LOG") 2>&1
+
+          echo "===== Build information ====="
+          echo "GITHUB_SHA=$GITHUB_SHA"
+          echo "RUN_ID=$GITHUB_RUN_ID"
+          echo "RUN_NUMBER=$GITHUB_RUN_NUMBER"
+
+          echo "===== APK tool ====="
+          APK_TOOL="staging_dir/host/bin/apk"
+
+          if [[ ! -x "$APK_TOOL" ]]; then
+            echo "::error::APK tool not found: $APK_TOOL"
+            exit 1
+          fi
+
+          "$APK_TOOL" --version
+
+          echo "===== APK tool extract help ====="
+          "$APK_TOOL" extract --help
+
+          echo "===== Firmware package ====="
+          FWPKG="$(find bin -type f -name 'nss-firmware-ipq50xx*.apk' -print -quit)"
+
+          if [[ -z "$FWPKG" ]]; then
+            echo "::error::Firmware APK not found"
+            exit 1
+          fi
+
+          echo "FWPKG=$FWPKG"
+          ls -lh "$FWPKG"
+          sha256sum "$FWPKG"
+          file "$FWPKG"
+
+          echo "===== Extract APK ====="
+          APK_ROOT="$RUNNER_TEMP/nss-firmware-apk"
+          rm -rf "$APK_ROOT"
+          mkdir -p "$APK_ROOT"
+
+          "$APK_TOOL" --allow-untrusted extract \
+            --no-chown \
+            --destination "$APK_ROOT" \
+            "$FWPKG"
+
+          echo "===== Extracted files ====="
+          find "$APK_ROOT" -type f -printf '%p %s bytes\n'
+
+          FW_BIN="$APK_ROOT/lib/firmware/qca-nss0-retail.bin"
+
+          if [[ ! -s "$FW_BIN" ]]; then
+            echo "::error::Firmware binary missing or empty"
+            exit 1
+          fi
+
+          echo "===== Firmware version ====="
+          strings "$FW_BIN" | grep -F 'NSS.FW.12.5-210'
+
+          echo "===== Diagnostic completed ====="
+
+      - name: Upload NSS diagnostic log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ra74-apk-diagnostic-${{ github.run_number }}
+          path: ${{ runner.temp }}/ra74-apk-diagnostic.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Verify NSS runtime packages, Wi-Fi default, and RA74 DSA path
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          IMAGE_DIR="bin/targets/qualcommax/ipq50xx"
+          MANIFEST="$(find "$IMAGE_DIR" -maxdepth 1 -type f -name '*.manifest' -print -quit)"
+          if [[ -z "$MANIFEST" ]]; then
+            echo "::error::The RA74 package manifest was not produced."
+            exit 1
+          fi
+
+          # These must be present in the final image, not merely selected
+          # in .config. nss-tools-dwmac pulls in the IPQ50xx wired stack;
+          # PPPoE and netlink are selected explicitly by the RA74 config.
+          required_packages=(
+            nss-tools-dwmac
+            wpad-mbedtls
+            nss-firmware
+            nss-firmware-ipq50xx
+            kmod-qca-dwmac-nss
+            kmod-qca-nss-drv
+            kmod-qca-nss-ecm
+            kmod-qca-nss-drv-vlan-mgr
+            kmod-qca-dsa-nss
+            kmod-qca8337-nss
+            kmod-qca-nss-drv-pppoe
+            kmod-qca-nss-drv-netlink
+            kmod-ppp
+            kmod-pppoe
+          )
+          for pkg in "${required_packages[@]}"; do
+            if ! grep -Eq "^${pkg}[[:space:]]+-" "$MANIFEST"; then
+              echo "::error::Required NSS package missing from final image manifest: $pkg"
+              exit 1
+            fi
+            echo "Manifest OK: $pkg"
+          done
+
+          if grep -Eq '^wpad-basic-mbedtls[[:space:]]+-' "$MANIFEST"; then
+            echo "::error::Basic wpad variant is forbidden; it lacks CONFIG_WNM for 802.11v."
+            exit 1
+          fi
+
+          # Confirm that the compiled hostapd configuration used by the full
+          # mbedTLS variant really contains WNM support, not just a selected package name.
+          mapfile -t hostapd_configs < <(find build_dir -type f -path '*/hostapd/.config' -print)
+          if (( ${#hostapd_configs[@]} == 0 )); then
+            echo "::error::Compiled hostapd .config was not found; cannot verify 802.11v support."
+            exit 1
+          fi
+          wnm_config_found=0
+          for cfg in "${hostapd_configs[@]}"; do
+            if grep -Fqx 'CONFIG_WNM=y' "$cfg"; then
+              wnm_config_found=1
+              echo "802.11v build config OK: $cfg"
+            fi
+          done
+          if (( wnm_config_found == 0 )); then
+            echo "::error::No compiled hostapd configuration has CONFIG_WNM=y."
+            exit 1
+          fi
+
+
+          # Inspect the actual target rootfs for the runtime scripts installed
+          # by nss-tools-dwmac (paths verified against its package Makefile).
+          ROOTFS="$(find build_dir/target-* -maxdepth 2 -type d -name 'root-*' -print -quit)"
+          if [[ -z "$ROOTFS" ]]; then
+            echo "::error::Could not locate the built target rootfs."
+            exit 1
+          fi
+          for file in \
+            etc/init.d/nss \
+            usr/sbin/nss-dwmac-up \
+            usr/sbin/nss-dwmac-probe \
+            usr/sbin/nss-status \
+            lib/nss/functions.sh \
+            etc/uci-defaults/98-nss-offload \
+            etc/uci-defaults/99-nss-topology; do
+            test -s "$ROOTFS/$file" || {
+              echo "::error::NSS runtime file missing from target rootfs: $file"
+              exit 1
+            }
+            echo "Rootfs OK: $file"
+          done
+
+          # Confirm that the RA74 DTS exposes both GMACs and the QCA8337's
+          # two CPU links: port 5 -> GMAC0 (PHY-to-PHY WAN link), port 6 -> GMAC1 (SGMII).
+          DTS="target/linux/qualcommax/dts/ipq5018-redmi-ax5400.dts"
+          grep -Fqx '#include "ipq5018-nss.dtsi"' "$DTS"
+          grep -A8 '^&gmac0 {' "$DTS" | grep -Fq 'status = "okay";'
+          grep -A12 '^&gmac1 {' "$DTS" | grep -Fq 'status = "okay";'
+          grep -Fq 'compatible = "qca,qca8337";' "$DTS"
+          grep -A8 'ethernet-port@5 {' "$DTS" | grep -Fq 'ethernet = <&gmac0>;'
+          grep -A10 'ethernet-port@6 {' "$DTS" | grep -Fq 'ethernet = <&gmac1>;'
+          grep -Fq 'qca,sgmii-enable-pll;' "$DTS"
+
+          # The stock board network map initially splits the DSA ports:
+          # LAN1-3 on eth1 and WAN on eth0. The DSA defaults must reconcile
+          # that split instead of hard-coding a fw_mask for the two GMACs.
+          BOARD_NET="target/linux/qualcommax/ipq50xx/base-files/etc/board.d/02_network"
+          for line in \
+            'ucidef_set_network_device_conduit "lan1" "eth1"' \
+            'ucidef_set_network_device_conduit "lan2" "eth1"' \
+            'ucidef_set_network_device_conduit "lan3" "eth1"' \
+            'ucidef_set_network_device_conduit "wan" "eth0"'; do
+            grep -Fq "$line" "$BOARD_NET" || {
+              echo "::error::RA74 board DSA conduit mapping missing: $line"
+              exit 1
+            }
+          done
+
+          DEFAULTS="package/nss/nss-tools/files/nss-dwmac.defaults"
+          INIT="package/nss/nss-tools/files/nss-dwmac.init"
+          UP="package/nss/nss-tools/files/nss-dwmac-up"
+          FUNCS="package/nss/nss-tools/files/functions.sh"
+
+          # Require the upstream C-3PO DSA path: retain the DSA switch,
+          # select topology=dsa, turn Wi-Fi offload on by default if unset,
+          # and merge the RA74 split conduits based on the actual board map.
+          grep -Fq 'if c3po_switch_bound; then' "$DEFAULTS"
+          grep -Fq "uci set nss.general.topology='dsa'" "$DEFAULTS"
+          grep -Fq "uci set nss.general.wifi_offload='1'" "$DEFAULTS"
+          grep -Fq 'dsa_board_conduits' "$DEFAULTS"
+          grep -Fq 'main_conduit' "$DEFAULTS"
+          grep -Fq 'if [ "$topology" = "dsa" ]; then' "$INIT"
+          grep -Fq 'switch_to_8021q' "$INIT"
+          grep -Fq 'nss_gmac_netdevs' "$INIT"
+          grep -Fq 'ifmap="$ifmap"' "$INIT"
+          grep -Fq 'nss_dsa_conduit' "$FUNCS"
+          grep -Fq 'nss_dsa_fw_mask' "$UP"
+          grep -Fq 'echo "$MASK" > $FWM' "$UP"
+
+          # Require correct sequencing: arm first, then ath11k/Wi-Fi and
+          # firmware VLAN / DSA managers / ECM / PPPoE managers.
+          grep -Fq 'poll_until 15 fw_started' "$UP"
+          grep -Fq 'wifi_load_now 1' "$UP"
+          grep -Fq 'modprobe qca-nss-vlan' "$UP"
+          grep -Fq 'modprobe qca-nss-pppoe' "$UP"
+          grep -Fq 'modprobe qca-dsa-nss' "$UP"
+          grep -Fq 'modprobe ecm front_end_selection=1' "$UP"
+          grep -Fq 'modprobe ath11k' "$INIT"
+          # The current init script writes the module parameter from wifi_load()
+          # using its local "offload" argument, not start_service's
+          # "wifi_offload" variable. With offload=1 it defers ath11k until
+          # nss-dwmac-up has armed the NSS firmware.
+          grep -Fq 'echo "$offload" > $NSSOFF' "$INIT"
+          grep -Fq 'deferring ath11k to nss-dwmac-up' "$INIT"
+
+          echo "Validated: NSS package manifest, runtime files, RA74 dual-GMAC DTS, DSA conduit migration, dynamic fw_mask, Wi-Fi offload default=1, VLAN/PPPoE/DSA managers and ECM sequencing."
+
+      - name: Verify RA74 image, NSS firmware, and thermal device tree
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          IMAGE_DIR="bin/targets/qualcommax/ipq50xx"
+          test -d "$IMAGE_DIR"
+          find "$IMAGE_DIR" -maxdepth 1 -type f -printf '%f\n' | sort
+
+          mapfile -t images < <(find "$IMAGE_DIR" -maxdepth 1 -type f -name '*xiaomi_redmi-ax5400*squashfs-sysupgrade.bin' -print)
+          if (( ${#images[@]} != 1 )); then
+            echo "::error::Expected exactly one RA74 sysupgrade image; found ${#images[@]}."
+            printf '%s\n' "${images[@]}"
+            exit 1
+          fi
+          IMAGE="${images[0]}"
+
+          # Verify the NSS firmware inside the actual firmware package.
+          FWPKG="$(find bin -type f \( \
+            -name 'nss-firmware-ipq50xx*.ipk' -o \
+            -name 'nss-firmware-ipq50xx*.apk' \
+          \) -print -quit)"
+          if [[ -z "$FWPKG" ]]; then
+            echo "::error::The nss-firmware package was not produced."
+            exit 1
+          fi
+          case "$FWPKG" in
+            *.ipk)
+              ar p "$FWPKG" data.tar.gz > /tmp/nss-firmware-data.tar.gz
+              FW_PATH="$(tar -tzf /tmp/nss-firmware-data.tar.gz | grep -F 'qca-nss0-retail.bin' | sed -n '1p')"
+              if [[ -z "$FW_PATH" ]]; then
+                echo "::error::qca-nss0-retail.bin is missing from $FWPKG."
+                exit 1
+              fi
+              tar -xOzf /tmp/nss-firmware-data.tar.gz "$FW_PATH" | strings > /tmp/nss-fw-strings.txt
+              ;;
+            *.apk)
+              # OpenWrt builds APK packages with apk-tools (package-pack.mk).
+              # Use the matching host apk binary; .apk is not a plain tar.gz.
+              APK_TOOL="staging_dir/host/bin/apk"
+              if [[ ! -x "$APK_TOOL" ]]; then
+                echo "::error::OpenWrt host apk tool not found: $APK_TOOL"
+                exit 1
+              fi
+              APK_ROOT="/tmp/nss-firmware-apk"
+              rm -rf "$APK_ROOT"
+              mkdir -p "$APK_ROOT"
+              "$APK_TOOL" --allow-untrusted extract --no-chown --destination "$APK_ROOT" "$FWPKG"
+              FW_BIN="$APK_ROOT/lib/firmware/qca-nss0-retail.bin"
+              if [[ ! -s "$FW_BIN" ]]; then
+                echo "::error::qca-nss0-retail.bin is missing from $FWPKG."
+                exit 1
+              fi
+              strings "$FW_BIN" > /tmp/nss-fw-strings.txt
+              ;;
+            *) echo "::error::Unsupported package format: $FWPKG"; exit 1 ;;
+          esac
+          grep -F 'NSS.FW.12.5-210' /tmp/nss-fw-strings.txt
+
+          # Verify the compiled board DTB contains the CPU thermal zone.
+          DTB="$(find build_dir -type f -name 'image-ipq5018-redmi-ax5400.dtb' -print -quit)"
+          if [[ -z "$DTB" ]]; then
+            echo "::error::RA74 device tree blob was not found."
+            exit 1
+          fi
+          dtc -I dtb -O dts "$DTB" > /tmp/ra74-device-tree.dts
+          grep -F 'cpu-thermal' /tmp/ra74-device-tree.dts
+          grep -F 'thermal-sensor' /tmp/ra74-device-tree.dts
+          grep -F 'cpu-passive' /tmp/ra74-device-tree.dts
+          grep -F 'cooling-device' /tmp/ra74-device-tree.dts
+
+          # Preserve the upstream OpenWrt sysupgrade filename.
+          mkdir -p release
+          cp "$IMAGE" release/
+          sha256sum "release/$(basename "$IMAGE")" > "release/$(basename "$IMAGE").sha256"
+          cp "$IMAGE_DIR"/*.manifest release/ 2>/dev/null || true
+          cp .config release/config.buildinfo
+          cp feeds.conf.default release/feeds.conf.default
+          {
+            echo "Device: Xiaomi Redmi AX5400 RA74"
+            echo "Target: qualcommax/ipq50xx"
+            echo "NSS firmware: 12.5-210"
+            echo "Switch topology: upstream DSA (tag_8021q), runtime conduit/fw_mask detection"
+            echo "Wi-Fi NSS offload: enabled by DSA first-boot default when unset (nss.general.wifi_offload=1)"
+            echo "Country: US"
+            echo "5 GHz: channel 36, HE160"
+            echo "TX power request: 25 dBm (subject to regulatory and driver limits)"
+            echo "Thermal: QCOM TSENS + CPU thermal governor + ath11k thermal support"
+            echo "Source commit: $GITHUB_SHA"
+            for feed in packages luci routing telephony video nss; do
+              if [[ -d "feeds/$feed/.git" ]]; then
+                printf 'Feed %s: %s\n' "$feed" "$(git -C "feeds/$feed" rev-parse HEAD)"
+              fi
+            done
+          } > release/BUILD-INFO.txt
+
+          RELEASE_DATE="$(date -u +%Y.%m.%d)"
+          RELEASE_TAG="ipq50xx-${RELEASE_DATE}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+            RELEASE_TAG="${RELEASE_TAG}-ra74-run${GITHUB_RUN_NUMBER}"
+          fi
+          echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
+          sha256sum "$IMAGE"
+
+      - name: Publish firmware to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
+          name: "Redmi AX5400 RA74 — NSS 12.5 — ${{ env.RELEASE_TAG }}"
+          body: |
+            Xiaomi Redmi AX5400 (RA74) only.
+            - NSS firmware: 12.5-210
+            - Switch topology: upstream DSA / tag_8021q; conduit and GMAC mask detected at boot
+            - Wi-Fi NSS offload: DSA first-boot default enabled (unless overridden in UCI)
+            - 5 GHz default: channel 36, HE160 (DFS may apply to the full 160 MHz block)
+            - Country code: US
+            - TX power setting: 25 dBm requested; actual output is limited by regulatory domain and driver
+            - CPU and ath11k thermal monitoring/throttling support are enabled
+            - Built from commit: ${{ github.sha }}
+            - Sysupgrade image only; not a stock factory/recovery image.
+          files: |
+            release/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+
+      - name: Upload RA74 build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Redmi-AX5400-RA74-NSS-${{ github.run_number }}
+          path: |
+            bin/targets/qualcommax/ipq50xx/
+            build.log
+          if-no-files-found: error
+          retention-days: 14
+ .config; then
+            echo "::error::wpad-basic-mbedtls is still selected; the full wpad variant must replace it."
+            exit 1
+          fi
+          grep -Fqx 'CONFIG_WNM=y' package/network/services/hostapd/files/hostapd-full.config
+
+          # Verify that the generated first-boot defaults really request 2.4 GHz HE40
+          # and disable only the OBSS overlap scan responsible for the 20 MHz fallback.
+          WIRELESS_DEFAULTS="files/etc/uci-defaults/99-ra74-wireless"
+          grep -Fqx "uci set wireless.radio0.channel='1'" "$WIRELESS_DEFAULTS"
+          grep -Fqx "uci set wireless.radio0.htmode='HE40'" "$WIRELESS_DEFAULTS"
+          grep -Fqx "uci set wireless.radio0.noscan='1'" "$WIRELESS_DEFAULTS"
+          bash -n "$WIRELESS_DEFAULTS"
+
           if grep -Fqx 'CONFIG_MAGIC_SYSRQ_SERIAL=y' .config || grep -Fqx 'CONFIG_DEVMEM=y' .config; then
             echo "::error::Temporary bring-up debug options are enabled; deployment build blocked."
             exit 1
