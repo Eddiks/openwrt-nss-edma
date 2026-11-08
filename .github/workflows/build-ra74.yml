@@ -306,10 +306,23 @@ jobs:
           rm -rf "$APK_ROOT"
           mkdir -p "$APK_ROOT"
 
-          "$APK_TOOL" --allow-untrusted extract \
-            --no-chown \
-            --destination "$APK_ROOT" \
-            "$FWPKG"
+          # apk-tools 3.x expects extract-specific options after the subcommand.
+          # Capture both output streams so a failing extraction is diagnosable
+          # even if the command emits no output to the Actions step log.
+          EXTRACT_LOG="$RUNNER_TEMP/ra74-apk-extract.log"
+          set +e
+          "$APK_TOOL" extract --allow-untrusted --no-chown \
+            --destination "$APK_ROOT" "$FWPKG" >"$EXTRACT_LOG" 2>&1
+          EXTRACT_RC=$?
+          set -e
+          cat "$EXTRACT_LOG"
+          if (( EXTRACT_RC != 0 )); then
+            echo "::error::apk extract failed with exit code $EXTRACT_RC for $FWPKG"
+            echo "APK package metadata:"
+            stat "$FWPKG" || true
+            od -An -tx1 -N96 "$FWPKG" || true
+            exit "$EXTRACT_RC"
+          fi
 
           echo "===== Extracted files ====="
           find "$APK_ROOT" -type f -printf '%p %s bytes\n'
@@ -617,7 +630,22 @@ jobs:
               APK_ROOT="/tmp/nss-firmware-apk"
               rm -rf "$APK_ROOT"
               mkdir -p "$APK_ROOT"
-              "$APK_TOOL" --allow-untrusted extract --no-chown --destination "$APK_ROOT" "$FWPKG"
+              # Keep option placement consistent with the diagnostic extraction
+              # above, and preserve apk-tools output on failure for the job log.
+              EXTRACT_LOG="$RUNNER_TEMP/ra74-apk-verify-extract.log"
+              set +e
+              "$APK_TOOL" extract --allow-untrusted --no-chown \
+                --destination "$APK_ROOT" "$FWPKG" >"$EXTRACT_LOG" 2>&1
+              EXTRACT_RC=$?
+              set -e
+              cat "$EXTRACT_LOG"
+              if (( EXTRACT_RC != 0 )); then
+                echo "::error::apk extract failed with exit code $EXTRACT_RC for $FWPKG"
+                echo "APK package metadata:"
+                stat "$FWPKG" || true
+                od -An -tx1 -N96 "$FWPKG" || true
+                exit "$EXTRACT_RC"
+              fi
               FW_BIN="$APK_ROOT/lib/firmware/qca-nss0-retail.bin"
               if [[ ! -s "$FW_BIN" ]]; then
                 echo "::error::qca-nss0-retail.bin is missing from $FWPKG."
@@ -627,7 +655,13 @@ jobs:
               ;;
             *) echo "::error::Unsupported package format: $FWPKG"; exit 1 ;;
           esac
-          grep -F 'NSS.FW.12.5-210' /tmp/nss-fw-strings.txt
+          if ! grep -Fq 'NSS.FW.12.5-210' /tmp/nss-fw-strings.txt; then
+            echo "::error::NSS firmware version 12.5-210 was not found in $FWPKG."
+            echo "Firmware string candidates:"
+            grep -E 'NSS\\.FW\\.' /tmp/nss-fw-strings.txt | head -n 20 || true
+            exit 1
+          fi
+          echo "NSS firmware version OK: 12.5-210"
 
           # Verify the compiled board DTB contains the CPU thermal zone.
           DTB="$(find build_dir -type f -name 'image-ipq5018-redmi-ax5400.dtb' -print -quit)"
