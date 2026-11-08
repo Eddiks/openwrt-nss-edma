@@ -676,10 +676,16 @@ define Device/xiaomi_redmi-ax5400
 	$(call Device/xiaomi_ipq50xx_ax_base)
 	DEVICE_MODEL := Redmi AX5400
 	DEVICE_DTS_CONFIG := config@mp03.1
+	# LuCI + Simplified Chinese, and the NSS status page, for RA74 only.
 	DEVICE_PACKAGES := ath11k-firmware-ipq5018-qcn6122 \
 		kmod-ath11k-pci \
 		ath11k-firmware-qcn9074 \
-		ipq-wifi-xiaomi_redmi-ax5400
+		ipq-wifi-xiaomi_redmi-ax5400 \
+		luci \
+		luci-i18n-base-zh-cn \
+		luci-app-nss \
+		luci-i18n-nss-zh-cn \
+		libmbedtls
 endef
 TARGET_DEVICES += xiaomi_redmi-ax5400
 
