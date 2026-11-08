@@ -55,6 +55,7 @@ jobs:
         run: cp .github/ci/ipq50xx/ra74.config .config
 
       - name: Load and validate RA74 build options
+        id: ra74_options
         shell: bash
         run: |
           set -euo pipefail
@@ -64,6 +65,7 @@ jobs:
             exit 1
           fi
           echo "RA74_DEFAULT_TXPOWER=$RA74_DEFAULT_TXPOWER" >> "$GITHUB_ENV"
+          echo "txpower=$RA74_DEFAULT_TXPOWER" >> "$GITHUB_OUTPUT"
           echo "RA74 default Wi-Fi transmit power: ${RA74_DEFAULT_TXPOWER} dBm"
 
       - name: Add one-time RA74 wireless defaults
@@ -773,7 +775,7 @@ jobs:
             - Wi-Fi NSS offload: DSA first-boot default enabled (unless overridden in UCI)
             - 5 GHz default: channel 36, HE160 (DFS may apply to the full 160 MHz block)
             - Country code: US
-            - TX power setting: ${{ env.RA74_DEFAULT_TXPOWER }} dBm requested; actual output is limited by regulatory domain and driver
+            - TX power setting: ${{ steps.ra74_options.outputs.txpower }} dBm requested; actual output is limited by regulatory domain and driver
             - CPU and ath11k thermal monitoring/throttling support are enabled
             - Built from commit: ${{ github.sha }}
             - Sysupgrade image only; not a stock factory/recovery image.
