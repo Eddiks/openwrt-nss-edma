@@ -1,0 +1,35 @@
+From: Christopher Griffin <christophergriffin05@example.invalid>
+Subject: [PATCH] wifi: ath11k: request optional firmware-2.bin directly
+
+ath11k treats firmware-2.bin as optional and falls back to API 1 when
+the file is not present. Request it with request_firmware_direct(),
+which checks the filesystem without invoking the userspace firmware
+helper. This avoids unnecessary firmware hotplug requests and procd
+warnings for a file that is not required by the API 1 fallback path.
+
+Keep the existing error handling so a missing API 2 container continues
+to select the existing API 1 firmware loading path.
+
+--- a/drivers/net/wireless/ath/ath11k/fw.c
++++ b/drivers/net/wireless/ath/ath11k/fw.c
+@@ -16,10 +16,14 @@ static int ath11k_fw_request_firmware_api_n(struct ath11k_base *ab,
+ 	struct ath11k_fw_ie *hdr;
+ 	const u8 *data;
+ 	__le32 *timestamp;
+-
+-	ab->fw.fw = ath11k_core_firmware_request(ab, name);
+-	if (IS_ERR(ab->fw.fw)) {
+-		ret = PTR_ERR(ab->fw.fw);
++	char path[100];
++
++	/* The file is optional: look for it on the filesystem only, so a
++	 * missing one does not go through the user-space fallback loader.
++	 */
++	ath11k_core_create_firmware_path(ab, name, path, sizeof(path));
++	ret = request_firmware_direct(&ab->fw.fw, path, ab->dev);
++	if (ret) {
+ 		ath11k_dbg(ab, ATH11K_DBG_BOOT, "failed to load %s: %d\n", name, ret);
+ 		ab->fw.fw = NULL;
+ 		return ret;
+--
+2.53.0
