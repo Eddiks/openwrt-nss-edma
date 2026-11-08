@@ -47,12 +47,26 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ra74-${{ runner.os }}-${{ hashFiles('.github/ci/ipq50xx/ra74.config', 'feeds.conf.default') }}-${{ github.sha }}
+          key: ra74-${{ runner.os }}-${{ hashFiles('.github/ci/ipq50xx/ra74.config', '.github/ci/ipq50xx/ra74-build.conf', 'feeds.conf.default') }}-${{ github.sha }}
           restore-keys: |
-            ra74-${{ runner.os }}-${{ hashFiles('.github/ci/ipq50xx/ra74.config', 'feeds.conf.default') }}-
+            ra74-${{ runner.os }}-${{ hashFiles('.github/ci/ipq50xx/ra74.config', '.github/ci/ipq50xx/ra74-build.conf', 'feeds.conf.default') }}-
 
       - name: Prepare RA74-only configuration
         run: cp .github/ci/ipq50xx/ra74.config .config
+
+      - name: Load and validate RA74 build options
+        id: ra74_options
+        shell: bash
+        run: |
+          set -euo pipefail
+          source .github/ci/ipq50xx/ra74-build.conf
+          if [[ ! "${RA74_DEFAULT_TXPOWER:-}" =~ ^(0|[1-9]|[12][0-9]|30)$ ]]; then
+            echo "::error::RA74_DEFAULT_TXPOWER must be an integer from 0 through 30 dBm."
+            exit 1
+          fi
+          echo "RA74_DEFAULT_TXPOWER=$RA74_DEFAULT_TXPOWER" >> "$GITHUB_ENV"
+          echo "txpower=$RA74_DEFAULT_TXPOWER" >> "$GITHUB_OUTPUT"
+          echo "RA74 default Wi-Fi transmit power: ${RA74_DEFAULT_TXPOWER} dBm"
 
       - name: Add one-time RA74 wireless defaults
         shell: bash
@@ -73,16 +87,17 @@ jobs:
           uci set wireless.radio0.channel='1'
           uci set wireless.radio0.htmode='HE40'
           uci set wireless.radio0.noscan='1'
-          uci set wireless.radio0.txpower='25'
+          uci set wireless.radio0.txpower='@RA74_DEFAULT_TXPOWER@'
 
           uci set wireless.radio1.country='US'
           uci set wireless.radio1.channel='36'
           uci set wireless.radio1.htmode='HE160'
-          uci set wireless.radio1.txpower='25'
+          uci set wireless.radio1.txpower='@RA74_DEFAULT_TXPOWER@'
 
           uci commit wireless
           exit 0
           EOF
+          sed -i "s/@RA74_DEFAULT_TXPOWER@/${RA74_DEFAULT_TXPOWER}/g" files/etc/uci-defaults/99-ra74-wireless
           chmod 0755 files/etc/uci-defaults/99-ra74-wireless
 
       - name: Update feeds and install only RA74 build dependencies
@@ -97,7 +112,8 @@ jobs:
           # their recursive build/runtime dependencies. Installing every source
           # package in every feed parses unrelated Kconfig entries (Qt5, fwknop,
           # squeezelite) that are not part of this firmware.
-          mapfile -t feed_packages < <(python3 - <<'PY'
+          FEED_PACKAGE_LIST="$RUNNER_TEMP/ra74-feed-packages.txt"
+          python3 - <<'PY' > "$FEED_PACKAGE_LIST"
           import re
           from pathlib import Path
 
@@ -132,7 +148,7 @@ jobs:
           for name in sorted(selected):
               print(name)
           PY
-          )
+          mapfile -t feed_packages < "$FEED_PACKAGE_LIST"
 
           printf 'Installing %s selected/feed device packages:\n' "${#feed_packages[@]}"
           printf '  %s\n' "${feed_packages[@]}"
@@ -204,6 +220,25 @@ jobs:
 
           # 802.11v requires the full WNM-enabled wpad build.
           grep -Fqx 'CONFIG_PACKAGE_wpad-mbedtls=y' .config
+          grep -Fqx 'CONFIG_PACKAGE_libmbedtls=y' .config
+ 
+          # Guard the actual RA74 image profile as well as .config: this
+          # prevents a future DEVICE_PACKAGES edit from silently dropping it.
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          source = Path("target/linux/qualcommax/image/ipq50xx.mk").read_text()
+          start = source.find("define Device/xiaomi_redmi-ax5400")
+          if start < 0:
+              raise SystemExit("RA74 device profile is missing")
+          end = source.find("\nendef", start)
+          if end < 0:
+              raise SystemExit("RA74 device profile has no endef")
+          profile = source[start:end]
+          if not re.search(r"(?m)^\s*libmbedtls\s*\\?$", profile):
+              raise SystemExit("RA74 DEVICE_PACKAGES does not include libmbedtls")
+          PY
           if grep -Eq '^CONFIG_PACKAGE_wpad-basic-mbedtls=(y|m)$' .config; then
             echo "::error::wpad-basic-mbedtls is still selected; the full wpad variant must replace it."
             exit 1
@@ -215,6 +250,8 @@ jobs:
           grep -Fqx "uci set wireless.radio0.channel='1'" "$WIRELESS_DEFAULTS"
           grep -Fqx "uci set wireless.radio0.htmode='HE40'" "$WIRELESS_DEFAULTS"
           grep -Fqx "uci set wireless.radio0.noscan='1'" "$WIRELESS_DEFAULTS"
+          grep -Fqx "uci set wireless.radio0.txpower='${RA74_DEFAULT_TXPOWER}'" "$WIRELESS_DEFAULTS"
+          grep -Fqx "uci set wireless.radio1.txpower='${RA74_DEFAULT_TXPOWER}'" "$WIRELESS_DEFAULTS"
           bash -n "$WIRELESS_DEFAULTS"
 
           if grep -Fqx 'CONFIG_MAGIC_SYSRQ_SERIAL=y' .config || grep -Fqx 'CONFIG_DEVMEM=y' .config; then
@@ -234,11 +271,45 @@ jobs:
       - name: Clean ath11k/mac80211 conditional build
         run: make package/kernel/mac80211/clean
 
+      # Reuse the upstream downloader's low-speed curl handling and retry policy.
+      - name: Download sources
+        timeout-minutes: 75
+        env:
+          GIT_HTTP_LOW_SPEED_LIMIT: 1000
+          GIT_HTTP_LOW_SPEED_TIME: 60
+          CURL_OPTIONS: --speed-limit 1000 --speed-time 60
+        shell: bash
+        run: |
+          set -euo pipefail
+          ok=0
+          for attempt in 1 2 3; do
+            if timeout --kill-after=60 20m make download -j"$(nproc)"; then
+              ok=1
+              break
+            fi
+            echo "::warning::download attempt $attempt failed or reached its time limit"
+            find dl -maxdepth 1 -name '*.dl' -printf '::warning::unfinished download: %f (%s bytes)\n' || true
+            sleep 5
+          done
+          if [[ "$ok" != 1 ]]; then
+            echo "::error::sources could not be downloaded in three attempts"
+            exit 1
+          fi
+
       - name: Build firmware
         shell: bash
         run: |
           set -o pipefail
           make -j"$(nproc)" V=s 2>&1 | tee build.log
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ra74-build-log-${{ github.run_number }}
+          path: build.log
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Diagnose NSS firmware APK
         if: always()
@@ -269,12 +340,13 @@ jobs:
           "$APK_TOOL" extract --help
 
           echo "===== Firmware package ====="
-          FWPKG="$(find bin -type f -name 'nss-firmware-ipq50xx*.apk' -print -quit)"
-
-          if [[ -z "$FWPKG" ]]; then
-            echo "::error::Firmware APK not found"
+          mapfile -t firmware_apks < <(find bin -type f -name 'nss-firmware-ipq50xx*.apk' -print | sort)
+          if (( ${#firmware_apks[@]} != 1 )); then
+            echo "::error::Expected exactly one NSS firmware APK for diagnostics; found ${#firmware_apks[@]}."
+            printf '  %s\n' "${firmware_apks[@]}"
             exit 1
           fi
+          FWPKG="${firmware_apks[0]}"
 
           echo "FWPKG=$FWPKG"
           ls -lh "$FWPKG"
@@ -286,10 +358,23 @@ jobs:
           rm -rf "$APK_ROOT"
           mkdir -p "$APK_ROOT"
 
-          "$APK_TOOL" --allow-untrusted extract \
-            --no-chown \
-            --destination "$APK_ROOT" \
-            "$FWPKG"
+          # apk-tools 3.x expects extract-specific options after the subcommand.
+          # Capture both output streams so a failing extraction is diagnosable
+          # even if the command emits no output to the Actions step log.
+          EXTRACT_LOG="$RUNNER_TEMP/ra74-apk-extract.log"
+          set +e
+          "$APK_TOOL" extract --allow-untrusted --no-chown \
+            --destination "$APK_ROOT" "$FWPKG" >"$EXTRACT_LOG" 2>&1
+          EXTRACT_RC=$?
+          set -e
+          cat "$EXTRACT_LOG"
+          if (( EXTRACT_RC != 0 )); then
+            echo "::error::apk extract failed with exit code $EXTRACT_RC for $FWPKG"
+            echo "APK package metadata:"
+            stat "$FWPKG" || true
+            od -An -tx1 -N96 "$FWPKG" || true
+            exit "$EXTRACT_RC"
+          fi
 
           echo "===== Extracted files ====="
           find "$APK_ROOT" -type f -printf '%p %s bytes\n'
@@ -327,6 +412,17 @@ jobs:
             exit 1
           fi
 
+          # Resolve the ABI-versioned APK name from the package Makefile.
+          # CONFIG_PACKAGE_libmbedtls selects the logical package; the final
+          # manifest uses libmbedtls21 when ABI_VERSION is 21.
+          MBEDTLS_ABI_VERSION="$(sed -n 's/^[[:space:]]*ABI_VERSION:=[[:space:]]*//p' package/libs/mbedtls/Makefile | head -n1)"
+          if [[ -z "$MBEDTLS_ABI_VERSION" ]]; then
+            echo "::error::Could not determine libmbedtls ABI_VERSION from its Makefile."
+            exit 1
+          fi
+          MBEDTLS_MANIFEST_PACKAGE="libmbedtls${MBEDTLS_ABI_VERSION}"
+          echo "Checking mbedTLS manifest package: $MBEDTLS_MANIFEST_PACKAGE"
+
           # These must be present in the final image, not merely selected
           # in .config. nss-tools-dwmac pulls in the IPQ50xx wired stack;
           # PPPoE and netlink are selected explicitly by the RA74 config.
@@ -336,7 +432,7 @@ jobs:
             luci-i18n-nss-zh-cn
             wpad-mbedtls
             hostapd-common
-            libmbedtls
+            "$MBEDTLS_MANIFEST_PACKAGE"
             nss-firmware
             nss-firmware-ipq50xx
             kmod-qca-dwmac-nss
@@ -363,25 +459,11 @@ jobs:
             exit 1
           fi
 
-          # Confirm that the compiled hostapd configuration used by the full
-          # mbedTLS variant really contains WNM support, not just a selected package name.
-          mapfile -t hostapd_configs < <(find build_dir -type f -path '*/hostapd/.config' -print)
-          if (( ${#hostapd_configs[@]} == 0 )); then
-            echo "::error::Compiled hostapd .config was not found; cannot verify 802.11v support."
-            exit 1
-          fi
-          wnm_config_found=0
-          for cfg in "${hostapd_configs[@]}"; do
-            if grep -Fqx 'CONFIG_WNM=y' "$cfg"; then
-              wnm_config_found=1
-              echo "802.11v build config OK: $cfg"
-            fi
-          done
-          if (( wnm_config_found == 0 )); then
-            echo "::error::No compiled hostapd configuration has CONFIG_WNM=y."
-            exit 1
-          fi
-
+          # CONFIG_WNM=y is verified in the selected full-variant source
+          # configuration before compilation. OpenWrt may remove or relocate
+          # the hostapd intermediate .config after packaging, so do not make
+          # that transient build file a release gate. The shipped wpad binary
+          # is checked below for the BSS Transition Management option string.
 
           # Inspect the actual target rootfs for the runtime scripts installed
           # by nss-tools-dwmac (paths verified against its package Makefile).
@@ -571,14 +653,16 @@ jobs:
           IMAGE="${images[0]}"
 
           # Verify the NSS firmware inside the actual firmware package.
-          FWPKG="$(find bin -type f \( \
+          mapfile -t firmware_packages < <(find bin -type f \( \
             -name 'nss-firmware-ipq50xx*.ipk' -o \
             -name 'nss-firmware-ipq50xx*.apk' \
-          \) -print -quit)"
-          if [[ -z "$FWPKG" ]]; then
-            echo "::error::The nss-firmware package was not produced."
+          \) -print | sort)
+          if (( ${#firmware_packages[@]} != 1 )); then
+            echo "::error::Expected exactly one nss-firmware-ipq50xx package; found ${#firmware_packages[@]}."
+            printf '  %s\n' "${firmware_packages[@]}"
             exit 1
           fi
+          FWPKG="${firmware_packages[0]}"
           case "$FWPKG" in
             *.ipk)
               ar p "$FWPKG" data.tar.gz > /tmp/nss-firmware-data.tar.gz
@@ -600,7 +684,22 @@ jobs:
               APK_ROOT="/tmp/nss-firmware-apk"
               rm -rf "$APK_ROOT"
               mkdir -p "$APK_ROOT"
-              "$APK_TOOL" --allow-untrusted extract --no-chown --destination "$APK_ROOT" "$FWPKG"
+              # Keep option placement consistent with the diagnostic extraction
+              # above, and preserve apk-tools output on failure for the job log.
+              EXTRACT_LOG="$RUNNER_TEMP/ra74-apk-verify-extract.log"
+              set +e
+              "$APK_TOOL" extract --allow-untrusted --no-chown \
+                --destination "$APK_ROOT" "$FWPKG" >"$EXTRACT_LOG" 2>&1
+              EXTRACT_RC=$?
+              set -e
+              cat "$EXTRACT_LOG"
+              if (( EXTRACT_RC != 0 )); then
+                echo "::error::apk extract failed with exit code $EXTRACT_RC for $FWPKG"
+                echo "APK package metadata:"
+                stat "$FWPKG" || true
+                od -An -tx1 -N96 "$FWPKG" || true
+                exit "$EXTRACT_RC"
+              fi
               FW_BIN="$APK_ROOT/lib/firmware/qca-nss0-retail.bin"
               if [[ ! -s "$FW_BIN" ]]; then
                 echo "::error::qca-nss0-retail.bin is missing from $FWPKG."
@@ -610,7 +709,13 @@ jobs:
               ;;
             *) echo "::error::Unsupported package format: $FWPKG"; exit 1 ;;
           esac
-          grep -F 'NSS.FW.12.5-210' /tmp/nss-fw-strings.txt
+          if ! grep -Fq 'NSS.FW.12.5-210' /tmp/nss-fw-strings.txt; then
+            echo "::error::NSS firmware version 12.5-210 was not found in $FWPKG."
+            echo "Firmware string candidates:"
+            grep -E 'NSS\.FW\.' /tmp/nss-fw-strings.txt | head -n 20 || true
+            exit 1
+          fi
+          echo "NSS firmware version OK: 12.5-210"
 
           # Verify the compiled board DTB contains the CPU thermal zone.
           DTB="$(find build_dir -type f -name 'image-ipq5018-redmi-ax5400.dtb' -print -quit)"
@@ -639,7 +744,7 @@ jobs:
             echo "Wi-Fi NSS offload: enabled by DSA first-boot default when unset (nss.general.wifi_offload=1)"
             echo "Country: US"
             echo "5 GHz: channel 36, HE160"
-            echo "TX power request: 25 dBm (subject to regulatory and driver limits)"
+            echo "TX power request: ${RA74_DEFAULT_TXPOWER} dBm (subject to regulatory and driver limits)"
             echo "Thermal: QCOM TSENS + CPU thermal governor + ath11k thermal support"
             echo "Source commit: $GITHUB_SHA"
             for feed in packages luci routing telephony video nss; do
@@ -670,7 +775,7 @@ jobs:
             - Wi-Fi NSS offload: DSA first-boot default enabled (unless overridden in UCI)
             - 5 GHz default: channel 36, HE160 (DFS may apply to the full 160 MHz block)
             - Country code: US
-            - TX power setting: 25 dBm requested; actual output is limited by regulatory domain and driver
+            - TX power setting: ${{ steps.ra74_options.outputs.txpower }} dBm requested; actual output is limited by regulatory domain and driver
             - CPU and ath11k thermal monitoring/throttling support are enabled
             - Built from commit: ${{ github.sha }}
             - Sysupgrade image only; not a stock factory/recovery image.

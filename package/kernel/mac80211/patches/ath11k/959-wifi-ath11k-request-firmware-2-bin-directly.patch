@@ -1,0 +1,34 @@
+From: Julius Bairaktaris <julius@bairaktaris.de>
+Subject: [PATCH] wifi: ath11k: request firmware-2.bin directly
+
+ath11k treats firmware-2.bin as optional and falls back to API 1 when
+the file is not present. Request it with request_firmware_direct(),
+which does not fall back to the userspace firmware helper.
+
+This avoids a misleading procd firmware-helper warning on OpenWrt
+when the optional API 2 container is absent. The API 1 fallback and
+the normal firmware loading path remain unchanged.
+
+Signed-off-by: Julius Bairaktaris <julius@bairaktaris.de>
+---
+
+--- a/drivers/net/wireless/ath/ath11k/fw.c
++++ b/drivers/net/wireless/ath/ath11k/fw.c
+@@ -16,10 +16,12 @@ static int ath11k_fw_request_firmware_api_n(struct ath11k_base *ab,
+ 	struct ath11k_fw_ie *hdr;
+ 	const u8 *data;
+ 	__le32 *timestamp;
++	char path[100];
+ 
+-	ab->fw.fw = ath11k_core_firmware_request(ab, name);
+-	if (IS_ERR(ab->fw.fw)) {
+-		ret = PTR_ERR(ab->fw.fw);
++	ath11k_core_create_firmware_path(ab, name, path, sizeof(path));
++
++	ret = request_firmware_direct(&ab->fw.fw, path, ab->dev);
++	if (ret) {
+ 		ath11k_dbg(ab, ATH11K_DBG_BOOT, "failed to load %s: %d\n", name, ret);
+ 		ab->fw.fw = NULL;
+ 		return ret;
+--
+2.53.0
