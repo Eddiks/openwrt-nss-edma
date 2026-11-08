@@ -1,0 +1,35 @@
+From 7f3d2b8a9c4e1d6f0a2b5c7d8e9f1029384756ab Mon Sep 17 00:00:00 2001
+From: OpenWrt NSS RA74 diagnostics <noreply@example.invalid>
+Date: Sun, 8 Nov 2026 18:00:00 +0800
+Subject: [TEST ONLY] ath11k: log NSS shared SRNG handoff metadata
+
+TEST-ONLY DIAGNOSTIC PATCH.
+
+Log the SRNG metadata immediately before ath11k passes the ring
+description to NSS. This is read-only instrumentation: it does not
+change ring allocation, DMA synchronization, descriptor contents,
+or NSS configuration.
+
+The cached flag is especially relevant for the shared REO destination
+and WBM2SW release rings. Remove this patch to roll back completely.
+
+---
+ drivers/net/wireless/ath/ath11k/nss.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/drivers/net/wireless/ath/ath11k/nss.c b/drivers/net/wireless/ath/ath11k/nss.c
+--- a/drivers/net/wireless/ath/ath11k/nss.c
++++ b/drivers/net/wireless/ath/ath11k/nss.c
+@@ -1581,5 +1581,13 @@ static void ath11k_nss_fill_srng_info(struct ath11k_base *ab, int ring_id,
+ 	hsi->entry_size = srng->entry_size;
+ 	hsi->num_entries = srng->num_entries;
+ 	hsi->flags = srng->flags;
++
++	ath11k_info(ab,
++		    "RINGDIAG NSS-HANDOFF ring_id=%u dir=%u paddr=%pad entry_size=%u entries=%u flags=0x%08x cached=%u lmac=%u\n",
++		    srng->ring_id, srng->ring_dir, &srng->ring_base_paddr,
++		    srng->entry_size, srng->num_entries, srng->flags,
++		    !!(srng->flags & HAL_SRNG_FLAGS_CACHED),
++		    !!(srng->flags & HAL_SRNG_FLAGS_LMAC_RING));
+ 
+ 	ath11k_dbg(ab, ATH11K_DBG_NSS,
