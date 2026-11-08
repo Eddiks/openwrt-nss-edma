@@ -289,12 +289,13 @@ jobs:
           "$APK_TOOL" extract --help
 
           echo "===== Firmware package ====="
-          FWPKG="$(find bin -type f -name 'nss-firmware-ipq50xx*.apk' -print -quit)"
-
-          if [[ -z "$FWPKG" ]]; then
-            echo "::error::Firmware APK not found"
+          mapfile -t firmware_apks < <(find bin -type f -name 'nss-firmware-ipq50xx*.apk' -print | sort)
+          if (( ${#firmware_apks[@]} != 1 )); then
+            echo "::error::Expected exactly one NSS firmware APK for diagnostics; found ${#firmware_apks[@]}."
+            printf '  %s\\n' "${firmware_apks[@]}"
             exit 1
           fi
+          FWPKG="${firmware_apks[0]}"
 
           echo "FWPKG=$FWPKG"
           ls -lh "$FWPKG"
@@ -601,14 +602,16 @@ jobs:
           IMAGE="${images[0]}"
 
           # Verify the NSS firmware inside the actual firmware package.
-          FWPKG="$(find bin -type f \( \
+          mapfile -t firmware_packages < <(find bin -type f \( \
             -name 'nss-firmware-ipq50xx*.ipk' -o \
             -name 'nss-firmware-ipq50xx*.apk' \
-          \) -print -quit)"
-          if [[ -z "$FWPKG" ]]; then
-            echo "::error::The nss-firmware package was not produced."
+          \) -print | sort)
+          if (( ${#firmware_packages[@]} != 1 )); then
+            echo "::error::Expected exactly one nss-firmware-ipq50xx package; found ${#firmware_packages[@]}."
+            printf '  %s\\n' "${firmware_packages[@]}"
             exit 1
           fi
+          FWPKG="${firmware_packages[0]}"
           case "$FWPKG" in
             *.ipk)
               ar p "$FWPKG" data.tar.gz > /tmp/nss-firmware-data.tar.gz
