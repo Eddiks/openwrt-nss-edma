@@ -26,7 +26,7 @@ diff --git a/drivers/net/wireless/ath/ath11k/nss.c b/drivers/net/wireless/ath/at
  	hsi->flags = srng->flags;
 +
 +	ath11k_info(ab,
-+		    "RINGDIAG NSS-HANDOFF ring_id=%u dir=%u paddr=%pad entry_size=%u entries=%u flags=0x%08x cached=%u lmac=%u\n",
++		    "RINGDIAG NSS-HANDOFF ring_id=%d dir=%d paddr=%pad entry_size=%u entries=%u flags=0x%08x cached=%d lmac=%d\n",
 +		    srng->ring_id, srng->ring_dir, &srng->ring_base_paddr,
 +		    srng->entry_size, srng->num_entries, srng->flags,
 +		    !!(srng->flags & HAL_SRNG_FLAGS_CACHED),
