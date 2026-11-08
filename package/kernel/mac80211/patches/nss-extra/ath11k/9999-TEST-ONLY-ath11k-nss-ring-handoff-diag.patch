@@ -20,6 +20,7 @@ and WBM2SW release rings. Remove this patch to roll back completely.
 diff --git a/drivers/net/wireless/ath/ath11k/nss.c b/drivers/net/wireless/ath/ath11k/nss.c
 --- a/drivers/net/wireless/ath/ath11k/nss.c
 +++ b/drivers/net/wireless/ath/ath11k/nss.c
++++ b/drivers/net/wireless/ath/ath11k/nss.c
 @@ -1581,5 +1581,13 @@ static void ath11k_nss_fill_srng_info(struct ath11k_base *ab, int ring_id,
  	hsi->entry_size = srng->entry_size;
  	hsi->num_entries = srng->num_entries;
