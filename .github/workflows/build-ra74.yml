@@ -85,6 +85,29 @@ jobs:
           uci set wireless.radio1.htmode='HE160'
           uci set wireless.radio1.txpower='__RA74_DEFAULT_TXPOWER__'
 
+          # Apply mixed WPA2-PSK/WPA3-SAE to AP interfaces on both radios.
+          # Keep each interface's existing SSID and key unchanged. With
+          # sae-mixed, OpenWrt/hostapd uses RSN with CCMP by default.
+          radio0_aps=0
+          radio1_aps=0
+          for section in $(uci -q show wireless | sed -n 's/^wireless\\.\\([^.=]*\\)=wifi-iface$/\\1/p'); do
+            mode="$(uci -q get "wireless.$section.mode")"
+            device="$(uci -q get "wireless.$section.device")"
+            [ "$mode" = "ap" ] || continue
+            case "$device" in
+              radio0|radio1) ;;
+              *) continue ;;
+            esac
+            uci set "wireless.$section.encryption=sae-mixed"
+            uci set "wireless.$section.ieee80211w=1"
+            case "$device" in
+              radio0) radio0_aps=$((radio0_aps + 1)) ;;
+              radio1) radio1_aps=$((radio1_aps + 1)) ;;
+            esac
+          done
+          [ "$radio0_aps" -gt 0 ] || { echo 'No AP interface found on radio0' >&2; exit 1; }
+          [ "$radio1_aps" -gt 0 ] || { echo 'No AP interface found on radio1' >&2; exit 1; }
+
           uci commit wireless
           exit 0
           EOF
@@ -241,6 +264,10 @@ jobs:
           grep -Fqx "uci set wireless.radio0.noscan='1'" "$WIRELESS_DEFAULTS"
           grep -Fqx "uci set wireless.radio0.txpower='$RA74_DEFAULT_TXPOWER'" "$WIRELESS_DEFAULTS"
           grep -Fqx "uci set wireless.radio1.txpower='$RA74_DEFAULT_TXPOWER'" "$WIRELESS_DEFAULTS"
+          grep -Fq 'uci set "wireless.$section.encryption=sae-mixed"' "$WIRELESS_DEFAULTS"
+          grep -Fq 'uci set "wireless.$section.ieee80211w=1"' "$WIRELESS_DEFAULTS"
+          grep -Fq 'No AP interface found on radio0' "$WIRELESS_DEFAULTS"
+          grep -Fq 'No AP interface found on radio1' "$WIRELESS_DEFAULTS"
           bash -n "$WIRELESS_DEFAULTS"
 
           if grep -Fqx 'CONFIG_MAGIC_SYSRQ_SERIAL=y' .config || grep -Fqx 'CONFIG_DEVMEM=y' .config; then
