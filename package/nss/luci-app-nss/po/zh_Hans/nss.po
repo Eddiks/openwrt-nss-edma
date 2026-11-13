@@ -1,0 +1,230 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Project-Id-Version: luci-app-nss\n"
+"Language: zh_Hans\n"
+"MIME-Version: 1.0\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+msgid "%s IPv4 / %s IPv6 / %s multicast"
+msgstr "%s IPv4 / %s IPv6 / %s 组播"
+
+msgid "%s pkts/s (NSS→host)"
+msgstr "%s 包/秒（NSS→主机）"
+
+msgid "Bridge offload (bridge-mgr)"
+msgstr "网桥硬件卸载（bridge-mgr）"
+
+msgid "CPU temperature"
+msgstr "CPU 温度"
+
+msgid "ECM accelerated connections"
+msgstr "ECM 加速连接数"
+
+msgid "ECM not loaded"
+msgstr "ECM 尚未加载"
+
+msgid ""
+"Each standalone switch port reaches the firmware as its own VLAN node on the "
+"GMAC above. A bridge has one node that all its switch ports share, and a "
+"VLAN-aware bridge has one for each of its VLANs."
+msgstr "每个独立交换机端口都会作为 GMAC 上的独立 VLAN 节点接入固件。普通网桥由所有交换机端口共享一个节点；支持 VLAN 的网桥则为每个 VLAN 分配一个节点。"
+
+msgid "Fast lane"
+msgstr "快速通道"
+
+msgid "Firmware"
+msgstr "固件"
+
+msgid ""
+"Firmware armed but heartbeat silent — check the system log; a reboot returns "
+"to the host stack"
+msgstr "固件已启动但心跳无响应——请检查系统日志；重启后将恢复由主机网络协议栈处理"
+
+msgid "Firmware-attached ports"
+msgstr "已接入固件的端口"
+
+msgid "Grant access to the NSS offload status page"
+msgstr "允许访问 NSS 卸载状态页面"
+
+msgid "Heartbeat"
+msgstr "心跳"
+
+msgid "Host stack (NSS plane not armed)"
+msgstr "主机协议栈（NSS 数据平面尚未启动）"
+
+msgid "Link"
+msgstr "链路"
+
+msgid "NSS Offload"
+msgstr "NSS 硬件卸载"
+
+msgid "NSS core %s load"
+msgstr "NSS 核心 %s 负载"
+
+msgid "NSS core load"
+msgstr "NSS 核心负载"
+
+msgid "NSS offload active (wifili)"
+msgstr "NSS 卸载已启用（WIFILI）"
+
+msgid "NSS offload active (wifili, 802.11s mesh offloaded)"
+msgstr "NSS 卸载已启用（WIFILI，802.11s Mesh 也已卸载）"
+
+msgid "NSS offload active (wifili; 802.11s mesh configured, not offloaded)"
+msgstr "NSS 卸载已启用（WIFILI；已配置 802.11s Mesh，但 Mesh 未卸载）"
+
+msgid "NSS temperature"
+msgstr "NSS 温度"
+
+msgid "No ports attached — host stack"
+msgstr "没有端口接入——由主机协议栈处理"
+
+msgid "Node"
+msgstr "节点"
+
+msgid "Offload active"
+msgstr "卸载已启用"
+
+msgid ""
+"Offloaded packets are forwarded by the firmware and never reach the host. "
+"\"via host\" / \"to host\" is the host↔firmware exception path — what was "
+"not offloaded — so low numbers there mean offload is working. Broadcast and "
+"multicast discovery, connection setup, short-lived flows and traffic "
+"addressed to the router itself always take that path: a flow is only "
+"offloaded once it is established, so a quiet port that carries little else "
+"shows a low offloaded share. Port totals are on Status → Overview."
+msgstr "已卸载的数据包由固件直接转发，不会到达主机。“经主机”/“发往主机”表示主机与固件之间的例外路径，即未被卸载的流量，因此这些数值较低通常意味着卸载正在正常工作。广播和组播发现、连接建立、短连接，以及发往路由器自身的流量始终走这条路径：连接建立后才会进行流量卸载，因此业务量较少的端口可能显示较低的卸载占比。端口总计数据可在“状态 → 概览”中查看。"
+
+msgid "Other SoC temperature"
+msgstr "其他 SoC 温度"
+
+msgid "PPPoE manager"
+msgstr "PPPoE 管理器"
+
+msgid ""
+"Packets through the firmware's Wi-Fi data path since boot, per radio. \"RX "
+"(REO)\" is every frame the radio received; \"RX delivered\" counts only "
+"frames for an AP or STA interface, so frames of an offloaded 802.11s mesh "
+"link show up in the first column only."
+msgstr "自启动以来每个无线电通过固件 Wi-Fi 数据路径处理的数据包数量。“RX (REO)”表示无线电接收的所有帧；“RX delivered”仅统计交付给 AP 或 STA 接口的帧，因此已卸载的 802.11s Mesh 链路帧只会计入第一列。"
+
+msgid "Port"
+msgstr "端口"
+
+msgid "RX (REO)"
+msgstr "接收（REO）"
+
+msgid "RX delivered"
+msgstr "已交付接收（RX）"
+
+msgid "RX offloaded"
+msgstr "RX 硬件卸载"
+
+msgid "RX packets"
+msgstr "RX 数据包"
+
+msgid "RX to host"
+msgstr "RX 发往主机"
+
+msgid "Radio"
+msgstr "无线电"
+
+msgid "SQM shaper"
+msgstr "SQM 流量整形器"
+
+msgid "Started"
+msgstr "已启动"
+
+msgid "Switch ports"
+msgstr "交换机端口"
+
+msgid "Switch ports and bridges on the firmware (DSA)"
+msgstr "固件中的交换机端口和网桥（DSA）"
+
+msgid "TX offloaded"
+msgstr "TX 硬件卸载"
+
+msgid "TX packets"
+msgstr "TX 数据包"
+
+msgid "TX sent"
+msgstr "已发送（TX）"
+
+msgid "TX via host"
+msgstr "TX 经主机转发"
+
+msgid ""
+"The offloaded share is part of the GMAC's figures above; the totals here are "
+"each port's own switch counters, all its VLANs together."
+msgstr "已卸载流量占比已包含在上方 GMAC 的统计数据中；此处的总计来自各端口自身的交换机计数器，并合并统计该端口的所有 VLAN。"
+
+msgid "Wi-Fi data path"
+msgstr "Wi-Fi 数据路径"
+
+msgid "Wi-Fi radios on the firmware"
+msgstr "固件接管的 Wi-Fi 无线电"
+
+msgid "Wi-Fi temperature"
+msgstr "Wi-Fi 温度"
+
+msgid "ath11k not loaded"
+msgstr "ath11k 尚未加载"
+
+msgid "avg"
+msgstr "平均值"
+
+msgid "down"
+msgstr "关闭"
+
+msgid "egress %s pkts / ingress %s pkts — %s marking rules"
+msgstr "出口 %s 包 / 入口 %s 包 — %s 条标记规则"
+
+msgid "host mode"
+msgstr "主机模式"
+
+msgid "host mode (mesh configured; firmware supports mesh offload)"
+msgstr "主机模式（已配置 Mesh；固件支持 Mesh 卸载）"
+
+msgid "host mode (mesh configured; this NSS firmware has no mesh offload)"
+msgstr "主机模式（已配置 Mesh；当前 NSS 固件不支持 Mesh 卸载）"
+
+msgid "loaded"
+msgstr "已加载"
+
+msgid "max"
+msgstr "最大值"
+
+msgid "min"
+msgstr "最小值"
+
+msgid "no"
+msgstr "否"
+
+msgid "no NSS shaper"
+msgstr "未启用 NSS 流量整形器"
+
+msgid "no NSS shaper on %s"
+msgstr "%s 上未启用 NSS 流量整形器"
+
+msgid "not loaded"
+msgstr "未加载"
+
+msgid "nsstbl on %s"
+msgstr "%s 上的 nsstbl"
+
+msgid "nsstbl on %s (a lane on the switch conduit %s)"
+msgstr "%s 上的 nsstbl（交换机主干接口 %s 上的通道）"
+
+msgid "off (no queue enabled in /etc/config/sqm)"
+msgstr "关闭（/etc/config/sqm 中没有启用队列）"
+
+msgid "up"
+msgstr "已启用"
+
+msgid "upload IGS: %s"
+msgstr "上传 IGS：%s"
+
+msgid "yes"
+msgstr "是"
