@@ -402,7 +402,7 @@ jobs:
             collectd-mod-thermal
             wpad-mbedtls
             hostapd-common
-            libmbedtls
+            libmbedtls21
             nss-firmware
             nss-firmware-ipq50xx
             kmod-qca-dwmac-nss
