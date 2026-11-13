@@ -53,6 +53,19 @@ jobs:
 
       - name: Prepare RA74-only configuration
         run: cp .github/ci/ipq50xx/ra74.config .config
+          
+      - name: Add LuCI and NSS status packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Keep the RA74-only profile from ra74.config; add only the LuCI
+          # collection and NSS status UI packages needed by this image.
+          cat >> .config <<'EOF'
+          CONFIG_PACKAGE_luci=y
+          CONFIG_PACKAGE_luci-app-nss=y
+          CONFIG_PACKAGE_luci-i18n-nss-zh-cn=y
+          CONFIG_LUCI_LANG_zh_Hans=y
+          EOF
 
       - name: Load and validate RA74 build options
         id: ra74_options
