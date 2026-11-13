@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - ra74-luci-zh-cn
+      - ra74-mainline
 
 permissions:
   contents: write
@@ -58,6 +58,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          source .github/ci/ipq50xx/ra74-build.conf
+          if [[ ! "$RA74_DEFAULT_TXPOWER" =~ ^([0-9]|[12][0-9]|30)$ ]]; then
+            echo "::error::RA74_DEFAULT_TXPOWER must be an integer from 0 through 30 dBm."
+            exit 1
+          fi
           mkdir -p files/etc/uci-defaults
           cat > files/etc/uci-defaults/99-ra74-wireless <<'EOF'
           #!/bin/sh
@@ -73,16 +78,17 @@ jobs:
           uci set wireless.radio0.channel='1'
           uci set wireless.radio0.htmode='HE40'
           uci set wireless.radio0.noscan='1'
-          uci set wireless.radio0.txpower='25'
+          uci set wireless.radio0.txpower='__RA74_DEFAULT_TXPOWER__'
 
           uci set wireless.radio1.country='US'
           uci set wireless.radio1.channel='36'
           uci set wireless.radio1.htmode='HE160'
-          uci set wireless.radio1.txpower='25'
+          uci set wireless.radio1.txpower='__RA74_DEFAULT_TXPOWER__'
 
           uci commit wireless
           exit 0
           EOF
+          sed -i "s/__RA74_DEFAULT_TXPOWER__/$RA74_DEFAULT_TXPOWER/g" files/etc/uci-defaults/99-ra74-wireless
           chmod 0755 files/etc/uci-defaults/99-ra74-wireless
 
       - name: Update feeds and install only RA74 build dependencies
@@ -197,9 +203,22 @@ jobs:
           grep -Fqx 'CONFIG_PACKAGE_sqm-scripts-nss=y' .config
           ! grep -Fqx 'CONFIG_NSS_FIRMWARE_VERSION_12_2=y' .config
 
+          grep -Fqx 'CONFIG_PACKAGE_luci=y' .config
+          grep -Fqx 'CONFIG_PACKAGE_luci-i18n-base-zh-cn=y' .config
           grep -Fqx 'CONFIG_PACKAGE_luci-app-nss=y' .config
           grep -Fqx 'CONFIG_PACKAGE_luci-i18n-nss-zh-cn=y' .config
           grep -Fqx 'CONFIG_LUCI_LANG_zh_Hans=y' .config
+          grep -Fqx 'CONFIG_PACKAGE_luci-app-statistics=y' .config
+          grep -Fqx 'CONFIG_PACKAGE_collectd=y' .config
+          grep -Fqx 'CONFIG_PACKAGE_rrdtool1=y' .config
+          grep -Fqx 'CONFIG_PACKAGE_collectd-mod-rrdtool=y' .config
+          grep -Fqx 'CONFIG_PACKAGE_collectd-mod-iwinfo=y' .config
+          grep -Fqx 'CONFIG_PACKAGE_collectd-mod-cpu=y' .config
+          grep -Fqx 'CONFIG_PACKAGE_collectd-mod-memory=y' .config
+          grep -Fqx 'CONFIG_PACKAGE_collectd-mod-interface=y' .config
+          grep -Fqx 'CONFIG_PACKAGE_collectd-mod-load=y' .config
+          grep -Fqx 'CONFIG_PACKAGE_collectd-mod-network=y' .config
+          grep -Fqx 'CONFIG_PACKAGE_collectd-mod-thermal=y' .config
           grep -Fqx 'CONFIG_ATH11K_THERMAL=y' .config
 
           # 802.11v requires the full WNM-enabled wpad build.
@@ -215,6 +234,8 @@ jobs:
           grep -Fqx "uci set wireless.radio0.channel='1'" "$WIRELESS_DEFAULTS"
           grep -Fqx "uci set wireless.radio0.htmode='HE40'" "$WIRELESS_DEFAULTS"
           grep -Fqx "uci set wireless.radio0.noscan='1'" "$WIRELESS_DEFAULTS"
+          grep -Fqx "uci set wireless.radio0.txpower='$RA74_DEFAULT_TXPOWER'" "$WIRELESS_DEFAULTS"
+          grep -Fqx "uci set wireless.radio1.txpower='$RA74_DEFAULT_TXPOWER'" "$WIRELESS_DEFAULTS"
           bash -n "$WIRELESS_DEFAULTS"
 
           if grep -Fqx 'CONFIG_MAGIC_SYSRQ_SERIAL=y' .config || grep -Fqx 'CONFIG_DEVMEM=y' .config; then
@@ -229,7 +250,7 @@ jobs:
           grep -Fqx 'CONFIG_THERMAL_DEFAULT_GOV_STEP_WISE=y' target/linux/qualcommax/config-6.18
           grep -Fqx 'CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y' target/linux/qualcommax/config-6.18
 
-          echo "Validated: RA74 only, NSS 12.5, LuCI Chinese, ath11k and CPU thermal support."
+          echo "Validated: RA74 only, NSS 12.5, LuCI Chinese, Statistics/collectd, ath11k and CPU thermal support."
 
       - name: Clean ath11k/mac80211 conditional build
         run: make package/kernel/mac80211/clean
@@ -332,8 +353,21 @@ jobs:
           # PPPoE and netlink are selected explicitly by the RA74 config.
           required_packages=(
             nss-tools-dwmac
+            luci
+            luci-i18n-base-zh-cn
             luci-app-nss
             luci-i18n-nss-zh-cn
+            luci-app-statistics
+            collectd
+            rrdtool1
+            collectd-mod-rrdtool
+            collectd-mod-iwinfo
+            collectd-mod-cpu
+            collectd-mod-memory
+            collectd-mod-interface
+            collectd-mod-load
+            collectd-mod-network
+            collectd-mod-thermal
             wpad-mbedtls
             hostapd-common
             libmbedtls
@@ -655,6 +689,8 @@ jobs:
             RELEASE_TAG="${RELEASE_TAG}-ra74-run${GITHUB_RUN_NUMBER}"
           fi
           echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
+          source .github/ci/ipq50xx/ra74-build.conf
+          echo "RA74_DEFAULT_TXPOWER=$RA74_DEFAULT_TXPOWER" >> "$GITHUB_ENV"
           sha256sum "$IMAGE"
 
       - name: Publish firmware to GitHub Release
@@ -670,7 +706,7 @@ jobs:
             - Wi-Fi NSS offload: DSA first-boot default enabled (unless overridden in UCI)
             - 5 GHz default: channel 36, HE160 (DFS may apply to the full 160 MHz block)
             - Country code: US
-            - TX power setting: 25 dBm requested; actual output is limited by regulatory domain and driver
+            - TX power setting: ${{ env.RA74_DEFAULT_TXPOWER }} dBm requested; actual output is limited by regulatory domain and driver
             - CPU and ath11k thermal monitoring/throttling support are enabled
             - Built from commit: ${{ github.sha }}
             - Sysupgrade image only; not a stock factory/recovery image.
