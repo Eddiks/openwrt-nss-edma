@@ -429,25 +429,11 @@ jobs:
             exit 1
           fi
 
-          # Confirm that the compiled hostapd configuration used by the full
-          # mbedTLS variant really contains WNM support, not just a selected package name.
-          mapfile -t hostapd_configs < <(find build_dir -type f -path '*/hostapd/.config' -print)
-          if (( ${#hostapd_configs[@]} == 0 )); then
-            echo "::error::Compiled hostapd .config was not found; cannot verify 802.11v support."
-            exit 1
-          fi
-          wnm_config_found=0
-          for cfg in "${hostapd_configs[@]}"; do
-            if grep -Fqx 'CONFIG_WNM=y' "$cfg"; then
-              wnm_config_found=1
-              echo "802.11v build config OK: $cfg"
-            fi
-          done
-          if (( wnm_config_found == 0 )); then
-            echo "::error::No compiled hostapd configuration has CONFIG_WNM=y."
-            exit 1
-          fi
-
+          # The source full-variant config is checked before compilation, and
+          # the final shipped wpad binary is checked below for its WNM
+          # bss_transition implementation. Do not gate the build on the
+          # intermediate hostapd/.config file: OpenWrt's package build layout
+          # and cleanup can make that transient file unavailable after linking.
 
           # Inspect the actual target rootfs for the runtime scripts installed
           # by nss-tools-dwmac (paths verified against its package Makefile).
