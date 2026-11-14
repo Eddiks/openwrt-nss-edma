@@ -16,9 +16,10 @@ LUCI_TITLE:=LuCI status page for NSS offloading
 LUCI_DESCRIPTION:=Status -> NSS Offload: renders 'nss-status -j' (firmware state, \
  cores, ports, Wi-Fi radios, ECM acceleration counts, SQM and fast-lane health), and \
  adds the NSS core load and the ECM-accelerated connections to Status -> Overview.
-LUCI_DEPENDS:=+luci-base +luci-mod-status \
-	+TARGET_qualcommax_ipq50xx:nss-tools-dwmac \
-	+!TARGET_qualcommax_ipq50xx:nss-tools
+# Runtime NSS tools are selected by the device profile, not by the UI.
+# Keeping this package UI-only avoids a Kconfig dependency cycle between
+# luci-app-nss, nss-tools-dwmac and the NSS kernel modules.
+LUCI_DEPENDS:=+luci-base +luci-mod-status
 LUCI_PKGARCH:=all
 
 PKG_LICENSE:=GPL-2.0-only
