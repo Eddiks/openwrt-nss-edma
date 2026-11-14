@@ -296,11 +296,11 @@ jobs:
 
           # Validate source-level assumptions before spending hours compiling.
           grep -Fqx '#include "ipq5018-nss.dtsi"' "$DTS"
-          grep -A8 '^&gmac0 {' "$DTS" | grep -Fq 'status = "okay";'
-          grep -A12 '^&gmac1 {' "$DTS" | grep -Fq 'status = "okay";'
+          grep -A8 '^&gmac0 {' "$DTS" | grep -F 'status = "okay";' >/dev/null
+          grep -A12 '^&gmac1 {' "$DTS" | grep -F 'status = "okay";' >/dev/null
           grep -Fq 'compatible = "qca,qca8337";' "$DTS"
-          grep -A8 'ethernet-port@5 {' "$DTS" | grep -Fq 'ethernet = <&gmac0>;'
-          grep -A10 'ethernet-port@6 {' "$DTS" | grep -Fq 'ethernet = <&gmac1>;'
+          grep -A8 'ethernet-port@5 {' "$DTS" | grep -F 'ethernet = <&gmac0>;' >/dev/null
+          grep -A10 'ethernet-port@6 {' "$DTS" | grep -F 'ethernet = <&gmac1>;' >/dev/null
           grep -Fq 'qca,sgmii-enable-pll;' "$DTS"
 
           for line in \
@@ -570,10 +570,17 @@ jobs:
             echo "::error::NSS overview include does not contain ECM accelerated connections."
             exit 1
           fi
-          if ! find "$ROOTFS/usr/lib/lua/luci/i18n" "$ROOTFS/usr/share" -type f -iname '*nss*zh*' -print -quit 2>/dev/null | grep -q .; then
+          NSS_TRANSLATION=""
+          for i18n_dir in "$ROOTFS/usr/lib/lua/luci/i18n" "$ROOTFS/usr/share"; do
+            [[ -d "$i18n_dir" ]] || continue
+            NSS_TRANSLATION="$(find "$i18n_dir" -type f -iname '*nss*zh*' -print -quit)"
+            [[ -n "$NSS_TRANSLATION" ]] && break
+          done
+          if [[ -z "$NSS_TRANSLATION" ]]; then
             echo "::error::Simplified Chinese NSS LuCI translation was not found in the rootfs."
             exit 1
           fi
+          echo "NSS Chinese translation OK: $NSS_TRANSLATION"
 
           # Verify the actual wpad binary shipped in the image recognizes the
           # 802.11v BSS Transition Management option. This catches a mismatch
@@ -616,11 +623,11 @@ jobs:
           # two CPU links: port 5 -> GMAC0 (PHY-to-PHY WAN link), port 6 -> GMAC1 (SGMII).
           DTS="target/linux/qualcommax/dts/ipq5018-redmi-ax5400.dts"
           grep -Fqx '#include "ipq5018-nss.dtsi"' "$DTS"
-          grep -A8 '^&gmac0 {' "$DTS" | grep -Fq 'status = "okay";'
-          grep -A12 '^&gmac1 {' "$DTS" | grep -Fq 'status = "okay";'
+          grep -A8 '^&gmac0 {' "$DTS" | grep -F 'status = "okay";' >/dev/null
+          grep -A12 '^&gmac1 {' "$DTS" | grep -F 'status = "okay";' >/dev/null
           grep -Fq 'compatible = "qca,qca8337";' "$DTS"
-          grep -A8 'ethernet-port@5 {' "$DTS" | grep -Fq 'ethernet = <&gmac0>;'
-          grep -A10 'ethernet-port@6 {' "$DTS" | grep -Fq 'ethernet = <&gmac1>;'
+          grep -A8 'ethernet-port@5 {' "$DTS" | grep -F 'ethernet = <&gmac0>;' >/dev/null
+          grep -A10 'ethernet-port@6 {' "$DTS" | grep -F 'ethernet = <&gmac1>;' >/dev/null
           grep -Fq 'qca,sgmii-enable-pll;' "$DTS"
 
           # The stock board network map initially splits the DSA ports:
