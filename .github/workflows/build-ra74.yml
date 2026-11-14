@@ -187,6 +187,12 @@ jobs:
           fi
           make defconfig
 
+          # Emit the exact failing command and workflow line if any assertion fails.
+          # Keep all validation checks unchanged; this is diagnostic instrumentation only.
+          PS4='+ line ${LINENO}: '
+          set -x
+          trap 'rc=$?; printf "::error::RA74 config validation failed at line %s: %s (exit %s)\\n" "$LINENO" "$BASH_COMMAND" "$rc"; exit "$rc"' ERR
+
           # Match the upstream workflow: every explicit RA74 config request
           # must survive Kconfig resolution, not merely the subset checked below.
           dropped=()
