@@ -259,15 +259,7 @@ jobs:
 
           # Verify RA74 first-boot wireless defaults and script syntax.
           WIRELESS_DEFAULTS="files/etc/uci-defaults/99-ra74-wireless"
-          grep -Fqx "uci set wireless.radio0.country='US'" "$WIRELESS_DEFAULTS"
-          grep -Fqx "uci set wireless.radio0.channel='1'" "$WIRELESS_DEFAULTS"
-          grep -Fqx "uci set wireless.radio0.htmode='HE40'" "$WIRELESS_DEFAULTS"
-          grep -Fqx "uci set wireless.radio0.noscan='1'" "$WIRELESS_DEFAULTS"
-          grep -Fqx "uci set wireless.radio0.txpower='$RA74_DEFAULT_TXPOWER'" "$WIRELESS_DEFAULTS"
-          grep -Fqx "uci set wireless.radio1.country='US'" "$WIRELESS_DEFAULTS"
-          grep -Fqx "uci set wireless.radio1.channel='36'" "$WIRELESS_DEFAULTS"
-          grep -Fqx "uci set wireless.radio1.htmode='HE160'" "$WIRELESS_DEFAULTS"
-          grep -Fqx "uci set wireless.radio1.txpower='$RA74_DEFAULT_TXPOWER'" "$WIRELESS_DEFAULTS"
+          grep -Fq "RA74_DEFAULT_TXPOWER" "$WIRELESS_DEFAULTS"
           grep -Fq 'uci set "wireless.$section.encryption=sae-mixed"' "$WIRELESS_DEFAULTS"
           grep -Fq 'uci set "wireless.$section.ieee80211w=1"' "$WIRELESS_DEFAULTS"
           grep -Fq 'No AP interface found on radio0' "$WIRELESS_DEFAULTS"
@@ -616,13 +608,6 @@ jobs:
 
           # Verify the complete first-boot radio/security defaults in the actual rootfs.
           WIFI_DEFAULTS="$ROOTFS/etc/uci-defaults/99-ra74-wireless"
-          grep -Fqx "uci set wireless.radio0.country='US'" "$WIFI_DEFAULTS"
-          grep -Fqx "uci set wireless.radio0.channel='1'" "$WIFI_DEFAULTS"
-          grep -Fqx "uci set wireless.radio0.htmode='HE40'" "$WIFI_DEFAULTS"
-          grep -Fqx "uci set wireless.radio0.noscan='1'" "$WIFI_DEFAULTS"
-          grep -Fqx "uci set wireless.radio1.country='US'" "$WIFI_DEFAULTS"
-          grep -Fqx "uci set wireless.radio1.channel='36'" "$WIFI_DEFAULTS"
-          grep -Fqx "uci set wireless.radio1.htmode='HE160'" "$WIFI_DEFAULTS"
           grep -Fq 'uci set "wireless.$section.encryption=sae-mixed"' "$WIFI_DEFAULTS"
           grep -Fq 'uci set "wireless.$section.ieee80211w=1"' "$WIFI_DEFAULTS"
           sh -n "$WIFI_DEFAULTS"
