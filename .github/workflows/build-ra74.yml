@@ -259,16 +259,20 @@ jobs:
 
           # Verify RA74 first-boot wireless defaults and script syntax.
           WIRELESS_DEFAULTS="files/etc/uci-defaults/99-ra74-wireless"
+          grep -Fqx "uci set wireless.radio0.country='US'" "$WIRELESS_DEFAULTS"
           grep -Fqx "uci set wireless.radio0.channel='1'" "$WIRELESS_DEFAULTS"
           grep -Fqx "uci set wireless.radio0.htmode='HE40'" "$WIRELESS_DEFAULTS"
           grep -Fqx "uci set wireless.radio0.noscan='1'" "$WIRELESS_DEFAULTS"
           grep -Fqx "uci set wireless.radio0.txpower='$RA74_DEFAULT_TXPOWER'" "$WIRELESS_DEFAULTS"
+          grep -Fqx "uci set wireless.radio1.country='US'" "$WIRELESS_DEFAULTS"
+          grep -Fqx "uci set wireless.radio1.channel='36'" "$WIRELESS_DEFAULTS"
+          grep -Fqx "uci set wireless.radio1.htmode='HE160'" "$WIRELESS_DEFAULTS"
           grep -Fqx "uci set wireless.radio1.txpower='$RA74_DEFAULT_TXPOWER'" "$WIRELESS_DEFAULTS"
           grep -Fq 'uci set "wireless.$section.encryption=sae-mixed"' "$WIRELESS_DEFAULTS"
           grep -Fq 'uci set "wireless.$section.ieee80211w=1"' "$WIRELESS_DEFAULTS"
           grep -Fq 'No AP interface found on radio0' "$WIRELESS_DEFAULTS"
           grep -Fq 'No AP interface found on radio1' "$WIRELESS_DEFAULTS"
-          bash -n "$WIRELESS_DEFAULTS"
+          sh -n "$WIRELESS_DEFAULTS"
 
           if grep -Fqx 'CONFIG_MAGIC_SYSRQ_SERIAL=y' .config || grep -Fqx 'CONFIG_DEVMEM=y' .config; then
             echo "::error::Temporary bring-up debug options are enabled; deployment build blocked."
@@ -284,6 +288,71 @@ jobs:
 
           echo "Validated: RA74 only, NSS 12.5, LuCI Chinese, Statistics/collectd, ath11k and CPU thermal support."
 
+      - name: Preflight RA74 source and DSA assertions
+        shell: bash
+        run: |
+          set -euo pipefail
+          DTS="target/linux/qualcommax/dts/ipq5018-redmi-ax5400.dts"
+          BOARD_NET="target/linux/qualcommax/ipq50xx/base-files/etc/board.d/02_network"
+          DEFAULTS="package/nss/nss-tools/files/nss-dwmac.defaults"
+          INIT="package/nss/nss-tools/files/nss-dwmac.init"
+          UP="package/nss/nss-tools/files/nss-dwmac-up"
+          FUNCS="package/nss/nss-tools/files/functions.sh"
+          NSS_FULL="package/nss/luci-app-nss/htdocs/luci-static/resources/view/nss/status.js"
+          NSS_OVERVIEW="package/nss/luci-app-nss/htdocs/luci-static/resources/view/status/include/16_nss_offload.js"
+          MENU="package/nss/luci-app-nss/root/usr/share/luci/menu.d/luci-app-nss.json"
+
+          # Validate source-level assumptions before spending hours compiling.
+          grep -Fqx '#include "ipq5018-nss.dtsi"' "$DTS"
+          grep -A8 '^&gmac0 {' "$DTS" | grep -Fq 'status = "okay";'
+          grep -A12 '^&gmac1 {' "$DTS" | grep -Fq 'status = "okay";'
+          grep -Fq 'compatible = "qca,qca8337";' "$DTS"
+          grep -A8 'ethernet-port@5 {' "$DTS" | grep -Fq 'ethernet = <&gmac0>;'
+          grep -A10 'ethernet-port@6 {' "$DTS" | grep -Fq 'ethernet = <&gmac1>;'
+          grep -Fq 'qca,sgmii-enable-pll;' "$DTS"
+
+          for line in \
+            'ucidef_set_network_device_conduit "lan1" "eth1"' \
+            'ucidef_set_network_device_conduit "lan2" "eth1"' \
+            'ucidef_set_network_device_conduit "lan3" "eth1"' \
+            'ucidef_set_network_device_conduit "wan" "eth0"'; do
+            grep -Fq "$line" "$BOARD_NET"
+          done
+
+          grep -Fq 'if c3po_switch_bound; then' "$DEFAULTS"
+          grep -Fq "uci set nss.general.topology='dsa'" "$DEFAULTS"
+          grep -Fq "uci set nss.general.wifi_offload='1'" "$DEFAULTS"
+          grep -Fq 'nss_dsa_conduit()' "$FUNCS"
+          grep -Fq 'nss_dsa_fw_mask()' "$FUNCS"
+          grep -Fq 'if [ "$topology" = "dsa" ]; then' "$INIT"
+          grep -Fq 'switch_to_8021q' "$INIT"
+          grep -Fq 'nss_gmac_netdevs' "$INIT"
+          grep -Fq 'ifmap="$ifmap"' "$INIT"
+          grep -Fq 'nss_dsa_fw_mask' "$UP"
+          grep -Fq 'echo "$MASK" > $FWM' "$UP"
+          grep -Fq 'poll_until 15 fw_started' "$UP"
+          grep -Fq 'wifi_load_now 1' "$UP"
+          grep -Fq 'modprobe qca-nss-vlan' "$UP"
+          grep -Fq 'modprobe qca-nss-pppoe' "$UP"
+          grep -Fq 'modprobe qca-dsa-nss' "$UP"
+          grep -Fq 'modprobe ecm front_end_selection=1' "$UP"
+          grep -Fq 'modprobe ath11k' "$INIT"
+          grep -Fq 'echo "$offload" > $NSSOFF' "$INIT"
+          grep -Fq 'deferring ath11k to nss-dwmac-up' "$INIT"
+
+          grep -Fq 'admin/status/nss' "$MENU"
+          for label in \
+            'Heartbeat' 'NSS core load' 'ECM accelerated connections' \
+            'Firmware-attached ports' 'Wi-Fi radios on the firmware' \
+            'Switch ports and bridges on the firmware (DSA)' 'SQM shaper'; do
+            grep -Fq "$label" "$NSS_FULL"
+          done
+          for label in 'NSS core load' 'ECM accelerated connections' 'CPU temperature' 'NSS temperature'; do
+            grep -Fq "$label" "$NSS_OVERVIEW"
+          done
+
+          echo "Preflight OK: RA74 DTS, dual-GMAC board mapping, NSS DSA source and LuCI source assertions."
+
       - name: Clean ath11k/mac80211 conditional build
         run: make package/kernel/mac80211/clean
 
@@ -292,6 +361,17 @@ jobs:
         run: |
           set -o pipefail
           make -j"$(nproc)" V=s 2>&1 | tee build.log
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ra74-failed-build-log-${{ github.run_number }}
+          path: |
+            build.log
+            .config
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Diagnose NSS firmware APK
         if: always()
@@ -534,11 +614,18 @@ jobs:
             echo "Rootfs OK: $file"
           done
 
-          # The installed first-boot script must preserve the 2.4 GHz HE40 defaults.
+          # Verify the complete first-boot radio/security defaults in the actual rootfs.
           WIFI_DEFAULTS="$ROOTFS/etc/uci-defaults/99-ra74-wireless"
+          grep -Fqx "uci set wireless.radio0.country='US'" "$WIFI_DEFAULTS"
           grep -Fqx "uci set wireless.radio0.channel='1'" "$WIFI_DEFAULTS"
           grep -Fqx "uci set wireless.radio0.htmode='HE40'" "$WIFI_DEFAULTS"
           grep -Fqx "uci set wireless.radio0.noscan='1'" "$WIFI_DEFAULTS"
+          grep -Fqx "uci set wireless.radio1.country='US'" "$WIFI_DEFAULTS"
+          grep -Fqx "uci set wireless.radio1.channel='36'" "$WIFI_DEFAULTS"
+          grep -Fqx "uci set wireless.radio1.htmode='HE160'" "$WIFI_DEFAULTS"
+          grep -Fq 'uci set "wireless.$section.encryption=sae-mixed"' "$WIFI_DEFAULTS"
+          grep -Fq 'uci set "wireless.$section.ieee80211w=1"' "$WIFI_DEFAULTS"
+          sh -n "$WIFI_DEFAULTS"
 
           # Confirm that the RA74 DTS exposes both GMACs and the QCA8337's
           # two CPU links: port 5 -> GMAC0 (PHY-to-PHY WAN link), port 6 -> GMAC1 (SGMII).
@@ -577,8 +664,10 @@ jobs:
           grep -Fq 'if c3po_switch_bound; then' "$DEFAULTS"
           grep -Fq "uci set nss.general.topology='dsa'" "$DEFAULTS"
           grep -Fq "uci set nss.general.wifi_offload='1'" "$DEFAULTS"
-          grep -Fq 'dsa_board_conduits' "$DEFAULTS"
-          grep -Fq 'main_conduit' "$DEFAULTS"
+          # These helpers live in functions.sh; the old dsa_board_conduits
+          # and main_conduit identifiers are not part of this DSA implementation.
+          grep -Fq 'nss_dsa_conduit()' "$FUNCS"
+          grep -Fq 'nss_dsa_fw_mask()' "$FUNCS"
           grep -Fq 'if [ "$topology" = "dsa" ]; then' "$INIT"
           grep -Fq 'switch_to_8021q' "$INIT"
           grep -Fq 'nss_gmac_netdevs' "$INIT"
@@ -683,6 +772,7 @@ jobs:
           cp "$IMAGE_DIR"/*.manifest release/ 2>/dev/null || true
           cp .config release/config.buildinfo
           cp feeds.conf.default release/feeds.conf.default
+          source .github/ci/ipq50xx/ra74-build.conf
           {
             echo "Device: Xiaomi Redmi AX5400 RA74"
             echo "Target: qualcommax/ipq50xx"
@@ -691,7 +781,7 @@ jobs:
             echo "Wi-Fi NSS offload: enabled by DSA first-boot default when unset (nss.general.wifi_offload=1)"
             echo "Country: US"
             echo "5 GHz: channel 36, HE160"
-            echo "TX power request: 25 dBm (subject to regulatory and driver limits)"
+            echo "TX power request: $RA74_DEFAULT_TXPOWER dBm (subject to regulatory and driver limits)"
             echo "Thermal: QCOM TSENS + CPU thermal governor + ath11k thermal support"
             echo "Source commit: $GITHUB_SHA"
             for feed in packages luci routing telephony video nss; do
@@ -707,7 +797,6 @@ jobs:
             RELEASE_TAG="${RELEASE_TAG}-ra74-run${GITHUB_RUN_NUMBER}"
           fi
           echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
-          source .github/ci/ipq50xx/ra74-build.conf
           echo "RA74_DEFAULT_TXPOWER=$RA74_DEFAULT_TXPOWER" >> "$GITHUB_ENV"
           sha256sum "$IMAGE"
 
