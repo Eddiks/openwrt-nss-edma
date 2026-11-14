@@ -265,7 +265,15 @@ jobs:
 
           # Verify RA74 first-boot wireless defaults and script syntax.
           WIRELESS_DEFAULTS="files/etc/uci-defaults/99-ra74-wireless"
-          grep -Fq "RA74_DEFAULT_TXPOWER" "$WIRELESS_DEFAULTS"
+          # The workflow substitutes the build-time variable into the generated
+          # first-boot script. Validate the resolved numeric value, not the
+          # template variable name (which must no longer appear in the output).
+          grep -Fqx "uci set wireless.radio0.txpower='$RA74_DEFAULT_TXPOWER'" "$WIRELESS_DEFAULTS"
+          grep -Fqx "uci set wireless.radio1.txpower='$RA74_DEFAULT_TXPOWER'" "$WIRELESS_DEFAULTS"
+          if grep -Fq '__RA74_DEFAULT_TXPOWER__' "$WIRELESS_DEFAULTS"; then
+            echo "::error::Unexpanded RA74 TX power placeholder remains in wireless defaults."
+            exit 1
+          fi
           grep -Fq 'uci set "wireless.$section.encryption=sae-mixed"' "$WIRELESS_DEFAULTS"
           grep -Fq 'uci set "wireless.$section.ieee80211w=1"' "$WIRELESS_DEFAULTS"
           grep -Fq 'No AP interface found on radio0' "$WIRELESS_DEFAULTS"
