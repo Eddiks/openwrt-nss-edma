@@ -187,22 +187,22 @@ jobs:
           import os, re, sys
           from pathlib import Path
           text = Path(sys.argv[1]).read_text()
-          m = re.search(r"(?ms)^\\s*choice\\b(.*?)^\\s*endchoice\\b", text)
+          m = re.search(r"(?ms)^\s*choice\b(.*?)^\s*endchoice\b", text)
           if not m: raise SystemExit("NSS firmware Makefile has no version choice")
           choice = m.group(1)
-          d = re.search(r"(?m)^\\s*default\\s+(NSS_FIRMWARE_VERSION_[A-Z0-9_]+)\\s*$", choice)
+          d = re.search(r"(?m)^\s*default\s+(NSS_FIRMWARE_VERSION_[A-Z0-9_]+)\s*$", choice)
           if not d: raise SystemExit("NSS firmware choice has no explicit default")
           default = d.group(1)
-          options = dict(re.findall(r'(?ms)^\\s*config\\s+(NSS_FIRMWARE_VERSION_[A-Z0-9_]+)\\s*\\n\\s*bool\\s+"([^"]+)"', choice))
+          options = dict(re.findall(r'(?ms)^\s*config\s+(NSS_FIRMWARE_VERSION_[A-Z0-9_]+)\s*\n\s*bool\s+"([^"]+)"', choice))
           if default not in options: raise SystemExit(f"Feed default {default} is not a declared option")
           label = options[default]
-          v = re.search(r"([0-9]+(?:\\.[0-9]+)+)\\s+Release\\s+([0-9]+)", label)
+          v = re.search(r"([0-9]+(?:\.[0-9]+)+)\s+Release\s+([0-9]+)", label)
           if not v: raise SystemExit(f"Cannot parse firmware release from: {label}")
           release = f"{v.group(1)}-{v.group(2)}"
-          p = re.search(r"(?m)^PKG_VERSION:=([^\\s]+)", text)
+          p = re.search(r"(?m)^PKG_VERSION:=([^\s]+)", text)
           if not p: raise SystemExit("Cannot parse NSS firmware PKG_VERSION")
           with open(os.environ["GITHUB_ENV"], "a") as env:
-              env.write(f"NSS_FW_KCONFIG_DEFAULT={default}\\nNSS_FW_LABEL={label}\\nNSS_FW_RELEASE={release}\\nNSS_FW_PACKAGE_VERSION={p.group(1)}\\n")
+              env.write(f"NSS_FW_KCONFIG_DEFAULT={default}\nNSS_FW_LABEL={label}\nNSS_FW_RELEASE={release}\nNSS_FW_PACKAGE_VERSION={p.group(1)}\n")
           print(f"Feed default: {default} / {label} / {release}; source package: {p.group(1)}")
           PY
           NSS_FW_FEED_COMMIT="$(git -C feeds/nss rev-parse HEAD)"
@@ -223,7 +223,7 @@ jobs:
           mapfile -t fw_versions < <(grep -E '^CONFIG_NSS_FIRMWARE_VERSION_[A-Za-z0-9_]+=y$' .config || true)
           if (( ${#fw_versions[@]} != 1 )); then
             echo "::error::Exactly one NSS firmware version must be selected."
-            printf '  %s\\n' "${fw_versions[@]}"
+            printf '  %s\n' "${fw_versions[@]}"
             exit 1
           fi
           selected_fw="${fw_versions[0]#CONFIG_}"
