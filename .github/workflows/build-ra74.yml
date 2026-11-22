@@ -176,6 +176,38 @@ jobs:
             exit 1
           }
 
+      - name: Read NSS firmware selection from the current feed
+        id: nss-firmware-feed
+        shell: bash
+        run: |
+          set -euo pipefail
+          FW_MK="package/feeds/nss/nss-firmware/Makefile"
+          test -s "$FW_MK" || { echo "::error::NSS firmware Makefile missing: $FW_MK"; exit 1; }
+          python3 - "$FW_MK" <<'PY'
+          import os, re, sys
+          from pathlib import Path
+          text = Path(sys.argv[1]).read_text()
+          m = re.search(r"(?ms)^\\s*choice\\b(.*?)^\\s*endchoice\\b", text)
+          if not m: raise SystemExit("NSS firmware Makefile has no version choice")
+          choice = m.group(1)
+          d = re.search(r"(?m)^\\s*default\\s+(NSS_FIRMWARE_VERSION_[A-Z0-9_]+)\\s*$", choice)
+          if not d: raise SystemExit("NSS firmware choice has no explicit default")
+          default = d.group(1)
+          options = dict(re.findall(r'(?ms)^\\s*config\\s+(NSS_FIRMWARE_VERSION_[A-Z0-9_]+)\\s*\\n\\s*bool\\s+"([^"]+)"', choice))
+          if default not in options: raise SystemExit(f"Feed default {default} is not a declared option")
+          label = options[default]
+          v = re.search(r"([0-9]+(?:\\.[0-9]+)+)\\s+Release\\s+([0-9]+)", label)
+          if not v: raise SystemExit(f"Cannot parse firmware release from: {label}")
+          release = f"{v.group(1)}-{v.group(2)}"
+          p = re.search(r"(?m)^PKG_VERSION:=([^\\s]+)", text)
+          if not p: raise SystemExit("Cannot parse NSS firmware PKG_VERSION")
+          with open(os.environ["GITHUB_ENV"], "a") as env:
+              env.write(f"NSS_FW_KCONFIG_DEFAULT={default}\\nNSS_FW_LABEL={label}\\nNSS_FW_RELEASE={release}\\nNSS_FW_PACKAGE_VERSION={p.group(1)}\\n")
+          print(f"Feed default: {default} / {label} / {release}; source package: {p.group(1)}")
+          PY
+          NSS_FW_FEED_COMMIT="$(git -C feeds/nss rev-parse HEAD)"
+          echo "NSS_FW_FEED_COMMIT=$NSS_FW_FEED_COMMIT" >> "$GITHUB_ENV"
+          echo "NSS firmware feed commit: $NSS_FW_FEED_COMMIT"
       - name: Resolve and validate the single-device configuration
         shell: bash
         run: |
@@ -186,6 +218,23 @@ jobs:
             exit 1
           fi
           make defconfig
+
+          # Follow the firmware default exposed by the currently checked-out NSS feed.
+          mapfile -t fw_versions < <(grep -E '^CONFIG_NSS_FIRMWARE_VERSION_[A-Za-z0-9_]+=y$' .config || true)
+          if (( ${#fw_versions[@]} != 1 )); then
+            echo "::error::Exactly one NSS firmware version must be selected."
+            printf '  %s\\n' "${fw_versions[@]}"
+            exit 1
+          fi
+          selected_fw="${fw_versions[0]#CONFIG_}"
+          selected_fw="${selected_fw%=y}"
+          if [[ "$selected_fw" != "$NSS_FW_KCONFIG_DEFAULT" ]]; then
+            echo "::error::Resolved NSS firmware ($selected_fw) differs from feed default ($NSS_FW_KCONFIG_DEFAULT)."
+            exit 1
+          fi
+          echo "Selected NSS firmware: $NSS_FW_LABEL ($NSS_FW_RELEASE)"
+          echo "NSS firmware source package: $NSS_FW_PACKAGE_VERSION"
+          echo "NSS feed commit: $NSS_FW_FEED_COMMIT"
 
           # Emit the exact failing command and workflow line if any assertion fails.
           # Keep all validation checks unchanged; this is diagnostic instrumentation only.
@@ -220,7 +269,6 @@ jobs:
 
           grep -Fqx 'CONFIG_ATH11K_MEM_PROFILE_1G=y' .config
           grep -Fqx 'CONFIG_NSS_MEM_PROFILE_MEDIUM=y' .config
-          grep -Fqx 'CONFIG_NSS_FIRMWARE_VERSION_12_5=y' .config
           grep -Fqx 'CONFIG_PACKAGE_nss-tools-dwmac=y' .config
           grep -Fqx 'CONFIG_PACKAGE_nss-firmware=y' .config
           grep -Fqx 'CONFIG_NSS_DRV_VLAN_ENABLE=y' .config
@@ -235,7 +283,6 @@ jobs:
           grep -Fqx 'CONFIG_PACKAGE_kmod-qca-nss-drv-pppoe=y' .config
           grep -Fqx 'CONFIG_PACKAGE_kmod-qca-nss-drv-netlink=y' .config
           grep -Fqx 'CONFIG_PACKAGE_sqm-scripts-nss=y' .config
-          ! grep -Fqx 'CONFIG_NSS_FIRMWARE_VERSION_12_2=y' .config
 
           grep -Fqx 'CONFIG_PACKAGE_luci=y' .config
           grep -Fqx 'CONFIG_PACKAGE_luci-i18n-base-zh-cn=y' .config
@@ -292,7 +339,7 @@ jobs:
           grep -Fqx 'CONFIG_THERMAL_DEFAULT_GOV_STEP_WISE=y' target/linux/qualcommax/config-6.18
           grep -Fqx 'CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y' target/linux/qualcommax/config-6.18
 
-          echo "Validated: RA74 only, NSS 12.5, LuCI Chinese, Statistics/collectd, ath11k and CPU thermal support."
+          echo "Validated: RA74 only, NSS $NSS_FW_LABEL ($NSS_FW_RELEASE), LuCI Chinese, Statistics/collectd, ath11k and CPU thermal support."
 
       - name: Preflight RA74 source and DSA assertions
         shell: bash
@@ -441,7 +488,7 @@ jobs:
           fi
 
           echo "===== Firmware version ====="
-          strings "$FW_BIN" | grep -F 'NSS.FW.12.5-210'
+          strings "$FW_BIN" | grep -F "NSS.FW.$NSS_FW_RELEASE"
 
           echo "===== Diagnostic completed ====="
 
@@ -757,7 +804,7 @@ jobs:
               ;;
             *) echo "::error::Unsupported package format: $FWPKG"; exit 1 ;;
           esac
-          grep -F 'NSS.FW.12.5-210' /tmp/nss-fw-strings.txt
+          grep -F "NSS.FW.$NSS_FW_RELEASE" /tmp/nss-fw-strings.txt
 
           # Verify the compiled board DTB contains the CPU thermal zone.
           DTB="$(find build_dir -type f -name 'image-ipq5018-redmi-ax5400.dtb' -print -quit)"
@@ -782,7 +829,10 @@ jobs:
           {
             echo "Device: Xiaomi Redmi AX5400 RA74"
             echo "Target: qualcommax/ipq50xx"
-            echo "NSS firmware: 12.5-210"
+            echo "NSS firmware: $NSS_FW_RELEASE"
+            echo "NSS firmware Kconfig: $NSS_FW_KCONFIG_DEFAULT"
+            echo "NSS firmware package source version: $NSS_FW_PACKAGE_VERSION"
+            echo "NSS firmware feed commit: $NSS_FW_FEED_COMMIT"
             echo "Switch topology: upstream DSA (tag_8021q), runtime conduit/fw_mask detection"
             echo "Wi-Fi NSS offload: enabled by DSA first-boot default when unset (nss.general.wifi_offload=1)"
             echo "Country: US"
@@ -811,10 +861,12 @@ jobs:
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           target_commitish: ${{ github.sha }}
-          name: "Redmi AX5400 RA74 — NSS 12.5 — ${{ env.RELEASE_TAG }}"
+          name: "Redmi AX5400 RA74 — NSS ${{ env.NSS_FW_RELEASE }} — ${{ env.RELEASE_TAG }}"
           body: |
             Xiaomi Redmi AX5400 (RA74) only.
-            - NSS firmware: 12.5-210
+            - NSS firmware: ${{ env.NSS_FW_RELEASE }}
+            - NSS firmware package source: ${{ env.NSS_FW_PACKAGE_VERSION }}
+            - NSS firmware feed commit: ${{ env.NSS_FW_FEED_COMMIT }}
             - Switch topology: upstream DSA / tag_8021q; conduit and GMAC mask detected at boot
             - Wi-Fi NSS offload: DSA first-boot default enabled (unless overridden in UCI)
             - 5 GHz default: channel 36, HE160 (DFS may apply to the full 160 MHz block)
