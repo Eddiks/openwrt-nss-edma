@@ -17,9 +17,9 @@ LUCI_DESCRIPTION:=Status -> NSS Offload: renders 'nss-status -j' (firmware state
  cores, ports, Wi-Fi radios, ECM acceleration counts, SQM and fast-lane health), and \
  adds the NSS core load and the ECM-accelerated connections to Status -> Overview.
 
-# IPQ50xx only. Runtime NSS tools are selected by the device profile,
-# not by the UI. Keeping this package UI-only avoids a Kconfig
-# dependency cycle between luci-app-nss, nss-tools-dwmac and NSS modules.
+# IPQ50xx only. Runtime NSS tools are selected by the firmware
+# configuration, not by the UI. Keeping this package UI-only avoids a
+# Kconfig dependency cycle between luci-app-nss, nss-tools-dwmac and NSS modules.
 LUCI_DEPENDS:=@TARGET_qualcommax_ipq50xx +luci-base +luci-mod-status
 LUCI_PKGARCH:=all
 
