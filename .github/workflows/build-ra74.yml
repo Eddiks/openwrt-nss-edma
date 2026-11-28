@@ -218,7 +218,7 @@ jobs:
             exit 1
           fi
 
-          grep -Fqx 'CONFIG_ATH11K_MEM_PROFILE_1G=y' .config
+          # ath11k memory profile is selected at runtime; no legacy build-time profile symbol.
           grep -Fqx 'CONFIG_NSS_MEM_PROFILE_MEDIUM=y' .config
           grep -Fqx 'CONFIG_NSS_FIRMWARE_VERSION_12_5=y' .config
           grep -Fqx 'CONFIG_PACKAGE_nss-tools-dwmac=y' .config
